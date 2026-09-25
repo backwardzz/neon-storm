@@ -43,7 +43,7 @@ const Net = {
 
   onLanHost(m) {
     if (m === 'hosted') {
-      this.lobby = [{ id: 0, name: this.myName }];
+      this.lobby = [{ id: 0, name: this.myName, skin: Meta.data.skin }];
       this.nextId = 1; this.started = false;
       setState('lobby'); UI.showLobby();
     } else if (m === 'hostbusy') {
@@ -80,7 +80,7 @@ const Net = {
       if (m === 'joined') {
         const ws = this.ws;
         this.hostConn = { get open() { return ws.readyState === 1; }, send(obj) { ws.send('D' + JSON.stringify(obj)); } };
-        this.hostConn.send({ t: 'hello', name });
+        this.hostConn.send({ t: 'hello', name, skin: Meta.data.skin });
       } else if (m === 'nohost') {
         UI.netStatus('Хоста пока нет — сначала кто-то должен нажать «Создать».', true);
         this.leave();
@@ -128,7 +128,7 @@ const Net = {
     const peer = (this.peer = new Peer(NET_PREFIX + this.code, { debug: 1 }));
     peer.on('open', () => {
       if (this.peer !== peer) return;
-      this.lobby = [{ id: 0, name }];
+      this.lobby = [{ id: 0, name, skin: Meta.data.skin }];
       this.nextId = 1;
       this.started = false;
       setState('lobby');
@@ -158,7 +158,8 @@ const Net = {
       const id = this.nextId++;
       conn.pid = id;
       this.conns.set(id, conn);
-      this.lobby.push({ id, name: String(d.name || 'Игрок').slice(0, 14) });
+      const skin = SKINS.some((s) => s.id === d.skin) ? d.skin : 'cyan';
+      this.lobby.push({ id, name: String(d.name || 'Игрок').slice(0, 14), skin });
       conn.send({ t: 'welcome', id, code: this.code });
       this.sendLobby();
       SFX.play('pickup');
@@ -205,7 +206,7 @@ const Net = {
     if (this.role !== 'host') return;
     this.started = true;
     G.mode = 'host';
-    newGame(this.lobby.map((l) => ({ id: l.id, name: l.name, ctl: l.id === 0 ? 'kbm' : 'net' })));
+    newGame(this.lobby.map((l) => ({ id: l.id, name: l.name, ctl: l.id === 0 ? 'kbm' : 'net', skin: l.skin })));
     const walls = G.walls.map((w) => [w.x, w.y, w.w, w.h]);
     for (const [id, c] of this.conns) if (c.open) c.send({ t: 'start', you: id, walls, players: this.lobby });
     this.events = [];
@@ -235,7 +236,7 @@ const Net = {
     peer.on('open', () => {
       if (this.peer !== peer) return;
       const c = (this.hostConn = peer.connect(NET_PREFIX + code, { reliable: true, serialization: 'json' }));
-      c.on('open', () => c.send({ t: 'hello', name }));
+      c.on('open', () => c.send({ t: 'hello', name, skin: Meta.data.skin }));
       c.on('data', (d) => this.onClientData(d));
       c.on('close', () => this.hostLost());
       c.on('error', () => this.hostLost());
@@ -275,7 +276,8 @@ const Net = {
           if (d.s.wave > G.best.wave) G.best.wave = d.s.wave;
           saveBest();
           SFX.music(0);
-          UI.showGameOver(d.s);
+          const res = recordRun(Object.assign({}, d.run || {}, { mode: 'client' }));
+          UI.showGameOver(d.s, res);
           setState('gameover');
         }
         break;
@@ -357,7 +359,7 @@ function buildSnapshot() {
     ]),
     e: G.enemies.filter((e) => !e.dead).map((e) => [
       e.id, ETYPES.indexOf(e.type), r0(e.x), r0(e.y), r0(e.vx + e.kvx), r0(e.vy + e.kvy), r2(e.angle), r0(e.hp), r0(e.maxHp),
-      (e.flash > 0 ? 1 : 0) | (e.slow > 0 ? 2 : 0) | (e.charging ? 4 : 0) | (e.enraged ? 8 : 0),
+      (e.flash > 0 ? 1 : 0) | (e.slow > 0 ? 2 : 0) | (e.charging ? 4 : 0) | (e.enraged ? 8 : 0) | (e.elite ? 16 : 0),
       r2(e.fuse), r2(Math.max(0, e.spawnT)), BSTATES.indexOf(e.bstate), r2(e.chargeA), r2(e.spin2),
     ]),
     b: G.bullets.map((b) => [r0(b.x), r0(b.y), r0(b.vx), r0(b.vy), BKINDS.indexOf(b.kind)]),
@@ -365,6 +367,7 @@ function buildSnapshot() {
     k: G.pickups.map((k) => [k.id, PTYPES.indexOf(k.type), r0(k.x), r0(k.y), k.weapon ? WEAPON_ORDER.indexOf(k.weapon) : -1, r1(k.life)]),
     r: G.barrels.map((b) => [r0(b.x), r0(b.y), b.fuse >= 0 ? 1 : 0, b.flash > 0 ? 1 : 0]),
     sp: G.spawns.map((s) => [ETYPES.indexOf(s.type), r0(s.x), r0(s.y), r2(s.t), r2(s.max)]),
+    ch: G.ch ? [G.ch.text, r1(G.ch.p), G.ch.goal, ['active', 'done', 'fail'].indexOf(G.ch.s), CH_REWARDS[G.ch.reward].text, G.ch.time === null ? -1 : r1(G.ch.time), G.ch.zone ? [G.ch.zone.x, G.ch.zone.y, G.ch.zone.r] : 0, G.ch.inZone ? 1 : 0, G.ch.why || '', G.ch.binary ? 1 : 0] : 0,
     ev: Net.events,
   };
 }
@@ -387,7 +390,8 @@ function clientStart(d) {
   G.mode = 'client';
   resetWorld();
   G.walls = d.walls.map((a) => ({ x: a[0], y: a[1], w: a[2], h: a[3] }));
-  G.players = d.players.map((l) => makePlayer(l.id, l.name, l.id === d.you ? 'kbm' : 'remote'));
+  G.players = d.players.map((l) => makePlayer(l.id, l.name, l.id === d.you ? 'kbm' : 'remote', l.skin));
+  dedupeColors(G.players);
   G.me = playerById(d.you);
   G.pc = G.players.length;
   G.cam.x = G.me.x; G.cam.y = G.me.y; G.zoom = ZOOM;
@@ -438,7 +442,7 @@ function applySnapshot(s) {
     if (!e) e = { id: a[0], type, r: ENEMIES[type].r, x: a[2], y: a[3], dead: false, heavy: 0 };
     e.sx = a[2]; e.sy = a[3]; e.svx = a[4]; e.svy = a[5]; e.angle = a[6]; e.hp = a[7]; e.maxHp = a[8];
     const f = a[9];
-    e.flash = f & 1 ? 0.05 : 0; e.slow = f & 2 ? 1 : 0; e.charging = !!(f & 4); e.enraged = !!(f & 8);
+    e.flash = f & 1 ? 0.05 : 0; e.slow = f & 2 ? 1 : 0; e.charging = !!(f & 4); e.enraged = !!(f & 8); e.elite = !!(f & 16);
     e.fuse = a[10]; e.spawnT = a[11]; e.bstate = BSTATES[a[12]] || 'chase'; e.chargeA = a[13]; e.spin2 = a[14];
     return e;
   });
@@ -456,6 +460,7 @@ function applySnapshot(s) {
     return { id: a[0], type: PTYPES[a[1]], x: a[2], y: a[3], weapon: a[4] >= 0 ? WEAPON_ORDER[a[4]] : null, life: a[5], r: a[1] === 0 ? 5 : 14, bob: prev ? prev.bob : rand(0, TAU) };
   });
   G.barrels = s.r.map((a) => ({ x: a[0], y: a[1], r: 17, fuse: a[2] ? 0.1 : -1, flash: a[3] ? 0.05 : 0, pulse: G.time * 3 + a[0] }));
+  G.ch = s.ch ? { text: s.ch[0], p: s.ch[1], goal: s.ch[2], s: ['active', 'done', 'fail'][s.ch[3]], rewardText: s.ch[4], time: s.ch[5] < 0 ? null : s.ch[5], zone: s.ch[6] ? { x: s.ch[6][0], y: s.ch[6][1], r: s.ch[6][2] } : null, inZone: !!s.ch[7], why: s.ch[8], binary: !!s.ch[9] } : null;
   G.spawns = s.sp.map((a) => ({ type: ETYPES[a[0]], x: a[1], y: a[2], t: a[3], max: a[4] }));
 
   for (const ev of s.ev) {

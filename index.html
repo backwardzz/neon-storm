@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;800&family=Russo+One&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
   <canvas id="game"></canvas>
@@ -23,6 +23,7 @@
           <button id="btnLocal" class="btn secondary">КООП НА ОДНОМ ПК</button>
           <button id="btnOnline" class="btn secondary">ОНЛАЙН / WI-FI</button>
         </div>
+        <button id="btnMissions" class="btn gold">🏆 МИССИИ И СКИНЫ <span id="menuStars" class="star-pill"></span></button>
       </div>
       <div class="best">Рекорд: <b id="bestScore">0</b> · Лучшая волна: <b id="bestWave">0</b></div>
       <div class="controls">
@@ -131,6 +132,23 @@
     </div>
   </div>
 
+  <!-- Миссии -->
+  <div id="missions" class="screen dim">
+    <div class="panel wide">
+      <h2 class="title">МИССИИ</h2>
+      <div class="rank-box">
+        <span id="rankName" class="rank-name"></span>
+        <span class="rank-stars"><b id="starCount">0</b> / <span id="starTotal">0</span> ★</span>
+        <span id="rankNext" class="rank-next"></span>
+      </div>
+      <h3 class="sub">Скины персонажа</h3>
+      <div id="skinList" class="skin-list"></div>
+      <h3 class="sub">Миссии <span class="muted">— прогресс сохраняется между забегами</span></h3>
+      <div id="missionList" class="mission-list"></div>
+      <button id="btnMissionsBack" class="btn secondary small">НАЗАД</button>
+    </div>
+  </div>
+
   <!-- Пауза -->
   <div id="paused" class="screen dim">
     <div class="panel">
@@ -159,6 +177,7 @@
       <h2 id="goTitle" class="title danger">ТЫ ПАЛ</h2>
       <div id="newRecord" class="record">★ НОВЫЙ РЕКОРД ★</div>
       <div id="goStats" class="stats"></div>
+      <div id="goAch" class="go-ach"></div>
       <div class="btn-row">
         <button id="btnRetry" class="btn primary">ЕЩЁ РАЗ</button>
         <button id="btnMenu" class="btn secondary">МЕНЮ</button>
@@ -168,13 +187,14 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
-  <script src="js/utils.js?v=5"></script>
-  <script src="js/audio.js?v=5"></script>
-  <script src="js/fx.js?v=5"></script>
-  <script src="js/data.js?v=5"></script>
-  <script src="js/game.js?v=5"></script>
-  <script src="js/net.js?v=5"></script>
-  <script src="js/render.js?v=5"></script>
-  <script src="js/ui.js?v=5"></script>
+  <script src="js/utils.js?v=7"></script>
+  <script src="js/audio.js?v=7"></script>
+  <script src="js/fx.js?v=7"></script>
+  <script src="js/data.js?v=7"></script>
+  <script src="js/game.js?v=7"></script>
+  <script src="js/missions.js?v=7"></script>
+  <script src="js/net.js?v=7"></script>
+  <script src="js/render.js?v=7"></script>
+  <script src="js/ui.js?v=7"></script>
 </body>
 </html>

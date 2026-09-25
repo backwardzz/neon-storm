@@ -13,7 +13,7 @@ const WSTATES = ['none', 'countdown', 'active', 'cleared', 'upgrade'];
 const BSTATES = ['chase', 'spiral', 'burst', 'volley', 'charge', 'summon'];
 const PTYPES = ['orb', 'health', 'weapon'];
 const PCOLORS = ['#33ffff', '#ff9dff', '#f4f4ff', '#5dffc8'];
-const MENU_STATES = ['menu', 'localSetup', 'online', 'lobby'];
+const MENU_STATES = ['menu', 'localSetup', 'online', 'lobby', 'missions'];
 
 const G = {
   state: 'menu', mode: 'solo', W: 2600, H: 1800,
@@ -174,11 +174,11 @@ const EFX = {
 };
 
 // ================= ИГРОК =================
-function makePlayer(id, name, ctl) {
+function makePlayer(id, name, ctl, skin) {
   const ox = [0, 70, -70, 0][id % 4], oy = [0, 0, 0, 70][id % 4];
   const x = G.W / 2 + ox, y = G.H / 2 + oy;
   return {
-    id, name, ctl, color: PCOLORS[id % 4],
+    id, name, ctl, skin: skin || 'cyan', color: skinColor(skin, id),
     x, y, rx: x, ry: y, vx: 0, vy: 0, r: 15, angle: 0,
     hp: 100, maxHp: 100, speed: 270, dead: false, revive: 0, tp: 0,
     dashCd: 0, dashMax: 1.1, dashTime: 0, dashDx: 0, dashDy: 0, dashing: false, wasDashing: false, invuln: 0,
@@ -330,7 +330,8 @@ function resetWorld() {
     score: 0, kills: 0, combo: 0, comboTimer: 0, maxCombo: 0,
     shake: 0, hurt: 0, whiteFlash: 0, banner: null, boss: null, dying: 0,
   });
-  G.stats = { shots: 0, hits: 0, dmg: 0, time: 0 };
+  G.stats = { shots: 0, hits: 0, dmg: 0, time: 0, bosses: 0, ch: 0, expl: 0, novas: 0, wk: {} };
+  G.ch = null; G.lastCh = null; G.recorded = false;
   FX.clear();
   Decals.clear();
   input.pressed.clear(); input.down = false;
@@ -341,7 +342,8 @@ function newGame(defs) {
   resetWorld();
   G.players = [];
   G.walls = genWalls();
-  G.players = defs.map((d) => makePlayer(d.id, d.name, d.ctl));
+  G.players = defs.map((d) => makePlayer(d.id, d.name, d.ctl, d.skin));
+  dedupeColors(G.players);
   G.me = G.players.find((p) => p.ctl === 'kbm') || G.players[0];
   G.pc = G.players.length;
   placeBarrels(8 + G.pc * 2);
@@ -354,11 +356,11 @@ function newGame(defs) {
   fx('banner', 'ГОТОВЬСЯ', hint, 2.2, '#33ffff');
 }
 
-function startSolo() { SFX.init(); SFX.play('click'); Net.leave(); G.mode = 'solo'; newGame([{ id: 0, name: 'Игрок', ctl: 'kbm' }]); }
+function startSolo() { SFX.init(); SFX.play('click'); Net.leave(); G.mode = 'solo'; newGame([{ id: 0, name: 'Игрок', ctl: 'kbm', skin: Meta.data.skin }]); }
 function startLocal(p2ctl) {
   SFX.init(); SFX.play('click'); Net.leave();
   G.mode = 'local'; G.p2ctl = p2ctl;
-  newGame([{ id: 0, name: 'Игрок 1', ctl: 'kbm' }, { id: 1, name: 'Игрок 2', ctl: p2ctl }]);
+  newGame([{ id: 0, name: 'Игрок 1', ctl: 'kbm', skin: Meta.data.skin }, { id: 1, name: 'Игрок 2', ctl: p2ctl }]);
 }
 function restartGame() {
   if (G.mode === 'host') Net.startGame();
@@ -366,6 +368,7 @@ function restartGame() {
   else if (G.mode === 'solo') startSolo();
 }
 function quitToMenu() {
+  if (G.mode !== 'client' && G.stats && G.me && !MENU_STATES.includes(G.state)) recordRun(buildRun());
   Net.leave();
   G.mode = 'solo';
   SFX.music(0.5);
@@ -417,6 +420,7 @@ function startWave() {
     }
   }
   if (G.barrels.length < 14) placeBarrels(2);
+  Ch.start(n, boss);
 }
 
 function updateWaves(dt) {
@@ -440,6 +444,7 @@ function updateWaves(dt) {
       G.spawnTimer = Math.max(0.3, 1.25 - n * 0.05) * (0.6 + group * 0.3) / (1 + 0.3 * (G.pc - 1));
     }
     if (!G.queue.length && !G.enemies.length && !G.spawns.length) {
+      Ch.onWaveClear();
       G.waveState = 'cleared';
       G.waveTimer = 1.8;
       G.ebullets.length = 0;
@@ -552,8 +557,10 @@ function gameOver() {
     score: G.score, wave: G.wave, kills: G.kills, combo: G.maxCombo, time: s.time,
     acc: s.shots ? Math.min(100, Math.round((s.hits / s.shots) * 100)) : 0, dmg: Math.round(s.dmg), record: rec,
   };
-  if (G.mode === 'host') Net.broadcast({ t: 'over', s: Object.assign({}, stats, { record: false }) });
-  UI.showGameOver(stats);
+  const run = buildRun();
+  const res = recordRun(run);
+  if (G.mode === 'host') Net.broadcast({ t: 'over', s: Object.assign({}, stats, { record: false }), run });
+  UI.showGameOver(stats, res);
   setState('gameover');
 }
 
@@ -622,6 +629,7 @@ function collectPickup(pk, p) {
     p.energy = Math.min(100, p.energy + 3.5 * p.ultMult);
     G.score += 2;
     fx('sfx', 'orb');
+    Ch.onOrb();
     if (was < 100 && p.energy >= 100) fx('ready', p.id);
   } else if (pk.type === 'health') {
     p.hp = Math.min(p.maxHp, p.hp + 30);
@@ -702,6 +710,7 @@ function actPlayer(p, dt) {
       p.energy = 0;
       triggerNova(p.x, p.y, 720, 170 * p.dmgMult, true, '#ffffff', p);
       fx('ult', p.id, Math.round(p.x), Math.round(p.y));
+      G.stats.novas++;
       if (!isOnline()) G.hitstop = 0.07;
     } else if (isLocalPlayer(p)) {
       FX.text(p.x, p.y - 30, 'Нужно больше энергии', '#8fe8b8', 13);
@@ -755,7 +764,7 @@ function fireRail(p, x, y, a, w) {
   for (const e of G.enemies) {
     if (e.dead) continue;
     if (segCircle(x, y, ex, ey, e.x, e.y, e.r + 5) >= 0) {
-      damageEnemy(e, dmg, { kx: Math.cos(a) * 320, ky: Math.sin(a) * 320, src: p });
+      damageEnemy(e, dmg, { kx: Math.cos(a) * 320, ky: Math.sin(a) * 320, src: p, kind: 'rail' });
       any = true;
     }
   }
@@ -769,6 +778,7 @@ function damagePlayer(p, dmg, sx, sy) {
   p.hp -= dmg;
   p.invuln = 0.7;
   G.combo = 0;
+  Ch.onHurt();
   if (!isOnline()) G.hitstop = 0.04;
   const a = Math.atan2(p.y - sy, p.x - sx);
   fx('knock', p.id, Math.round(Math.cos(a) * 380), Math.round(Math.sin(a) * 380));
@@ -829,15 +839,21 @@ function damageEnemy(e, dmg, o) {
   if (src.cryo > 0 && Math.random() < src.cryo) e.slow = 2;
   fx('num', Math.round(e.x), Math.round(e.y - e.r - 4), Math.round(dmg), crit ? 1 : 0);
   if (o.chain !== false && src.chain > 0 && Math.random() < src.chain) chainLightning(e, dmg * 0.7, src);
-  if (e.hp <= 0) killEnemy(e, src);
+  if (e.hp <= 0) killEnemy(e, src, o.kind, o.expl);
 }
 
-function killEnemy(e, src) {
+function killEnemy(e, src, kind, expl) {
   if (e.dead) return;
   e.dead = true;
   const d = ENEMIES[e.type];
   G.kills++; G.combo++; G.comboTimer = 2.5;
   if (G.combo > G.maxCombo) G.maxCombo = G.combo;
+  if (kind) G.stats.wk[kind] = (G.stats.wk[kind] || 0) + 1;
+  if (expl) G.stats.expl++;
+  if (e.type === 'boss') G.stats.bosses++;
+  Ch.onKill(e, kind, expl);
+  Ch.onCombo(G.combo);
+  if (e.elite) G.pickups.push(makePickup('weapon', e.x, e.y));
   const pts = Math.round(d.score * comboMult());
   G.score += pts;
   fx('kill', Math.round(e.x), Math.round(e.y), ETYPES.indexOf(e.type));
@@ -856,7 +872,7 @@ function killEnemy(e, src) {
       G.enemies.push(m);
     }
   }
-  if (e.type === 'bomber') explode(e.x, e.y, 95, e.dmg, 'both', e.dmg, src);
+  if (e.type === 'bomber') explode(e.x, e.y, 95, e.dmg, 'both', e.dmg, src, 'bomber');
   if (e.type === 'boss') bossDeath(e, pts);
 }
 
@@ -875,7 +891,7 @@ function bossDeath(e, pts) {
 }
 
 // owner: 'p' — бьёт только врагов, 'e' — только игроков, 'both' — всех
-function explode(x, y, r, dmg, owner, pdmg, src) {
+function explode(x, y, r, dmg, owner, pdmg, src, kind) {
   fx('boom', Math.round(x), Math.round(y), Math.round(r), '#ffb13b');
   if (owner !== 'e') {
     for (const e of G.enemies) {
@@ -883,7 +899,7 @@ function explode(x, y, r, dmg, owner, pdmg, src) {
       const d = dist(x, y, e.x, e.y);
       if (d < r + e.r) {
         const a = Math.atan2(e.y - y, e.x - x);
-        damageEnemy(e, dmg * (1 - 0.5 * Math.min(1, d / r)), { kx: Math.cos(a) * 460, ky: Math.sin(a) * 460, chain: false, src });
+        damageEnemy(e, dmg * (1 - 0.5 * Math.min(1, d / r)), { kx: Math.cos(a) * 460, ky: Math.sin(a) * 460, chain: false, src, kind, expl: true });
       }
     }
   }
@@ -916,7 +932,7 @@ function chainLightning(srcE, dmg, src) {
     if (!best) break;
     hit.push(best.id);
     pts.push({ x: best.x, y: best.y });
-    damageEnemy(best, dmg, { chain: false, canCrit: false, src });
+    damageEnemy(best, dmg, { chain: false, canCrit: false, src, kind: 'chain' });
     cur = best;
   }
   if (pts.length > 1) {
@@ -987,7 +1003,7 @@ function updateBullets(dt) {
           if (b.hit && b.hit.includes(e.id)) continue;
           if (!b.drone && !b.counted) { G.stats.hits++; b.counted = true; }
           const sp = Math.hypot(b.vx, b.vy) || 1;
-          damageEnemy(e, b.dmg, { kx: (b.vx / sp) * b.knock, ky: (b.vy / sp) * b.knock, src: b.own });
+          damageEnemy(e, b.dmg, { kx: (b.vx / sp) * b.knock, ky: (b.vy / sp) * b.knock, src: b.own, kind: b.kind });
           if (b.explode) { dead = true; break; }
           if (b.pierce > 0) { b.pierce--; (b.hit || (b.hit = [])).push(e.id); b.dmg *= 0.85; }
           else { dead = true; break; }
@@ -1000,7 +1016,7 @@ function updateBullets(dt) {
       }
     }
     if (dead) {
-      if (b.explode) explode(b.x, b.y, b.explode.r, b.explode.dmg * b.own.dmgMult, 'p', 0, b.own);
+      if (b.explode) explode(b.x, b.y, b.explode.r, b.explode.dmg * b.own.dmgMult, 'p', 0, b.own, b.kind);
       removeAt(B, i);
     }
   }
@@ -1033,6 +1049,7 @@ function updateSpawns(dt) {
     s.t -= dt;
     if (s.t <= 0) {
       const e = makeEnemy(s.type, s.x, s.y);
+      if (s.elite) makeElite(e);
       G.enemies.push(e);
       if (s.type === 'boss') {
         G.boss = e;
@@ -1278,7 +1295,7 @@ function updateBarrels(dt) {
       b.fuse -= dt;
       if (b.fuse <= 0) {
         removeAt(B, i);
-        explode(b.x, b.y, 140, 70 * (1 + G.wave * 0.05), 'both', 30, null);
+        explode(b.x, b.y, 140, 70 * (1 + G.wave * 0.05), 'both', 30, null, 'barrel');
         fx('shards', Math.round(b.x), Math.round(b.y), '#ff5a3b', 10, 450);
       }
     }
@@ -1296,7 +1313,7 @@ function updateNovas(dt) {
       if (d < n.r + e.r) {
         n.hit.add(e.id);
         const a = Math.atan2(e.y - n.y, e.x - n.x);
-        damageEnemy(e, n.dmg, { kx: Math.cos(a) * 650, ky: Math.sin(a) * 650, chain: false, src: n.src });
+        damageEnemy(e, n.dmg, { kx: Math.cos(a) * 650, ky: Math.sin(a) * 650, chain: false, src: n.src, kind: 'nova' });
         e.slow = Math.max(e.slow, 1);
       }
     }
@@ -1353,6 +1370,7 @@ function cosmetics(dt) {
       p.rx += (p.x - p.rx) * f; p.ry += (p.y - p.ry) * f;
     } else { p.rx = p.x; p.ry = p.y; }
     p.recoil *= Math.exp(-dt * 16);
+    if (p.skin === 'rainbow') p.color = RAINBOW[Math.floor(G.time * 8) % RAINBOW.length];
     p.droneAngle += dt * 2.2;
     if (!isAuth() || smooth) p.flash -= dt;
     if (p.dead) continue;
@@ -1419,6 +1437,7 @@ function update(dt, rdt) {
   updatePickups(dt);
   updateBarrels(dt);
   updateNovas(dt);
+  Ch.update(dt);
   updateVisuals(dt, rdt);
 
   if (anyAlive()) updateWaves(dt);
@@ -1533,7 +1552,7 @@ function onKey(code) {
   if (code === 'Escape' || code === 'KeyP') {
     if (G.state === 'playing') pauseGame();
     else if (G.state === 'paused') resumeGame();
-    else if (code === 'Escape' && (G.state === 'localSetup' || G.state === 'online')) setState('menu');
+    else if (code === 'Escape' && (G.state === 'localSetup' || G.state === 'online' || G.state === 'missions')) setState('menu');
   }
   if (G.state === 'upgrade' && /^Digit[1-3]$/.test(code)) pickUpgrade(G.upgradeChoices[+code[5] - 1]);
   if (G.state === 'menu' && code === 'Enter') startSolo();

@@ -6,6 +6,7 @@ const UI = {
     for (const s of document.querySelectorAll('.screen')) s.classList.toggle('active', s.id === id);
     document.body.classList.toggle('ingame', id === null);
     if (id === 'menu') this.updateBest();
+    if (id === 'missions') this.showMissions();
     if (id === 'paused') this.$('pauseNote').style.display = isOnline() ? 'block' : 'none';
     if (id === 'online') { this.$('netStatus').textContent = ''; this.$('netStatus').classList.remove('err'); }
   },
@@ -13,6 +14,7 @@ const UI = {
   updateBest() {
     this.$('bestScore').textContent = G.best.score.toLocaleString('ru-RU');
     this.$('bestWave').textContent = G.best.wave;
+    this.$('menuStars').textContent = Meta.stars() + ' ★ · ' + Meta.rank().name;
   },
 
   updateMute() {
@@ -44,7 +46,7 @@ const UI = {
     });
   },
 
-  showGameOver(s) {
+  showGameOver(s, res) {
     const mm = Math.floor(s.time / 60), ss = Math.floor(s.time % 60);
     const rows = [
       ['Счёт', s.score.toLocaleString('ru-RU')],
@@ -58,6 +60,13 @@ const UI = {
     this.$('goTitle').textContent = G.players.length > 1 ? 'КОМАНДА ПАЛА' : 'ТЫ ПАЛ';
     this.$('goStats').innerHTML = rows.map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join('');
     this.$('newRecord').style.display = s.record ? 'block' : 'none';
+    const ach = this.$('goAch');
+    const fresh = (res && res.fresh) || [], skins = (res && res.skins) || [];
+    ach.innerHTML = fresh.length || skins.length
+      ? '<div class="ach-title">НОВЫЕ ДОСТИЖЕНИЯ</div>' +
+        fresh.map((a) => `<div class="ach-item"><span>${a.icon}</span><b>${a.name}</b><em>${a.desc}</em><i>+1 ★</i></div>`).join('') +
+        skins.map((k) => `<div class="ach-item ach-skin"><span class="swatch" style="--sc:${k.color === 'rainbow' ? '#ff4dd2' : k.color}"></span><b>Открыт скин «${k.name}»</b><em>Выбери его в «Миссии и скины»</em></div>`).join('')
+      : '';
     const client = G.mode === 'client';
     this.$('btnRetry').style.display = client ? 'none' : '';
     this.$('goHint').textContent = client ? 'Ждём, пока хост начнёт заново…' : G.mode === 'host' ? 'Enter — новая игра для всей команды' : 'Enter — начать заново';
@@ -87,7 +96,7 @@ const UI = {
     this.$('lobbyCode').classList.toggle('addr', lan);
     this.$('codeLabel').textContent = lan ? 'АДРЕС' : 'КОД';
     this.$('lobbyList').innerHTML = Net.lobby.map((l) =>
-      `<li style="--pc:${PCOLORS[l.id % 4]}"><span class="dot"></span>${escapeHtml(l.name)}${l.id === 0 ? ' <em>хост</em>' : ''}${l.id === (host ? 0 : Net.myId) ? ' <em>ты</em>' : ''}</li>`).join('');
+      `<li style="--pc:${skinColor(l.skin, l.id)}"><span class="dot"></span>${escapeHtml(l.name)}${l.id === 0 ? ' <em>хост</em>' : ''}${l.id === (host ? 0 : Net.myId) ? ' <em>ты</em>' : ''}</li>`).join('');
     for (let i = Net.lobby.length; i < NET_MAX_PLAYERS; i++) this.$('lobbyList').innerHTML += '<li class="empty">свободное место</li>';
     this.$('btnStart').style.display = host ? '' : 'none';
     this.$('lobbyWait').style.display = host ? 'none' : '';
@@ -109,6 +118,33 @@ const UI = {
     return v;
   },
 
+  showMissions() {
+    const stars = Meta.stars(), rank = Meta.rank(), next = Meta.nextRank();
+    this.$('rankName').textContent = rank.name;
+    this.$('starCount').textContent = stars;
+    this.$('starTotal').textContent = ACHIEVEMENTS.length;
+    this.$('rankNext').textContent = next ? `до звания «${next.name}» — ${next.stars - stars} ★` : 'высшее звание!';
+    this.$('skinList').innerHTML = SKINS.map((s) => {
+      const open = Meta.skinUnlocked(s), cur = Meta.data.skin === s.id;
+      const col = s.color === 'rainbow' ? '' : `--sc:${s.color}`;
+      return `<button class="skin ${open ? '' : 'locked'} ${cur ? 'cur' : ''} ${s.color === 'rainbow' ? 'rainbow' : ''}" data-skin="${s.id}" style="${col}">
+        <span class="swatch"></span><b>${s.name}</b><em>${open ? (cur ? 'выбран' : 'выбрать') : '🔒 ' + s.stars + ' ★'}</em></button>`;
+    }).join('');
+    for (const b of this.$('skinList').querySelectorAll('.skin:not(.locked)')) {
+      b.addEventListener('click', () => { SFX.play('click'); Meta.setSkin(b.dataset.skin); this.showMissions(); });
+    }
+    const d = Meta.data;
+    this.$('missionList').innerHTML = ACHIEVEMENTS.map((a) => {
+      const done = d.done.includes(a.id);
+      const v = Math.min(a.goal, a.get(d));
+      return `<div class="mission ${done ? 'done' : ''}">
+        <span class="m-icon">${a.icon}</span>
+        <div class="m-body"><b>${a.name}</b><em>${a.desc}</em>
+          <div class="m-bar"><i style="width:${done ? 100 : (v / a.goal) * 100}%"></i></div></div>
+        <span class="m-val">${done ? '★' : v.toLocaleString('ru-RU') + '/' + a.goal.toLocaleString('ru-RU')}</span></div>`;
+    }).join('');
+  },
+
   tick() {
     if (G.state === 'localSetup') this.padStatus();
   },
@@ -117,6 +153,8 @@ const UI = {
     const click = (id, fn) => this.$(id).addEventListener('click', () => { SFX.init(); SFX.play('click'); fn(); });
     click('btnPlay', startSolo);
     click('btnLocal', () => setState('localSetup'));
+    click('btnMissions', () => setState('missions'));
+    click('btnMissionsBack', () => setState('menu'));
     click('btnOnline', () => setState('online'));
     click('btnP2kb', () => startLocal('kb2'));
     click('btnP2pad', () => startLocal('pad'));

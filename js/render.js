@@ -32,6 +32,7 @@ function render() {
   c.scale(Z, Z);
   c.translate(-camX, -camY);
   drawFloor(c, v);
+  drawZone(c);
   drawSpawns(c);
   drawPickups(c, v);
   drawBarrels(c, v);
@@ -204,15 +205,17 @@ function drawEnemies(c, v) {
   for (const e of G.enemies) {
     if (e.x < v.l || e.x > v.r || e.y < v.t || e.y > v.b) continue;
     drawGlow(c, e.x, e.y, e.r * (e.type === 'boss' ? 3.2 : 2.6), ENEMIES[e.type].color, e.type === 'boss' ? 0.8 : 0.5);
+    if (e.elite) drawGlow(c, e.x, e.y, e.r * 4, '#ffd23b', 0.6 + 0.2 * Math.sin(G.time * 8));
   }
   c.globalCompositeOperation = 'source-over';
   for (const e of G.enemies) {
     if (e.x < v.l || e.x > v.r || e.y < v.t || e.y > v.b) continue;
     drawEnemy(c, e);
+    if (e.elite) drawEliteMark(c, e);
   }
   // полоски здоровья
   for (const e of G.enemies) {
-    if (e.type === 'boss' || e.hp >= e.maxHp || e.dead) continue;
+    if (e.type === 'boss' || (e.hp >= e.maxHp && !e.elite) || e.dead) continue;
     if (e.x < v.l || e.x > v.r || e.y < v.t || e.y > v.b) continue;
     const w = e.r * 2;
     c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(e.x - w / 2, e.y - e.r - 10, w, 4);
@@ -656,6 +659,7 @@ function drawHUD(c) {
     sx += sw + gap;
   }
 
+  drawChallenge(c);
   drawMinimap(c);
   drawBanner(c);
   c.restore();
@@ -740,6 +744,8 @@ function drawIndicators(c) {
   for (const pk of G.pickups) if (pk.type === 'weapon') items.push({ x: pk.x, y: pk.y, color: WEAPONS[pk.weapon].color, s: 9 });
   if (G.boss && !G.boss.dead) items.push({ x: G.boss.x, y: G.boss.y, color: '#ff2d95', s: 14 });
   for (const p of G.players) if (p !== G.me) items.push({ x: p.rx, y: p.ry, color: p.dead ? '#ff6b8e' : p.color, s: p.dead ? 12 : 8 });
+  if (G.ch && G.ch.s === 'active' && G.ch.zone) items.push({ x: G.ch.zone.x, y: G.ch.zone.y, color: '#4dff9a', s: 12 });
+  for (const e of G.enemies) if (e.elite && !e.dead) items.push({ x: e.x, y: e.y, color: '#ffd23b', s: 12 });
   const m = 44, Z = G.zoom || ZOOM;
   for (const it of items) {
     const sx = (it.x - G.camX) * Z + VW / 2, sy = (it.y - G.camY) * Z + VH / 2;
@@ -771,4 +777,70 @@ function drawCrosshair(c) {
   c.fillStyle = '#fff';
   c.beginPath(); c.arc(x, y, 1.8, 0, TAU); c.fill();
   c.restore();
+}
+
+// ---------- задания волны ----------
+function drawZone(c) {
+  const ch = G.ch;
+  if (!ch || !ch.zone || ch.s !== 'active') return;
+  const z = ch.zone, T = G.time, k = Math.min(1, ch.p / ch.goal);
+  c.fillStyle = rgba('#4dff9a', ch.inZone ? 0.12 : 0.05);
+  c.beginPath(); c.arc(z.x, z.y, z.r, 0, TAU); c.fill();
+  c.globalCompositeOperation = 'lighter';
+  c.strokeStyle = rgba('#4dff9a', 0.6); c.lineWidth = 3;
+  c.setLineDash([18, 12]); c.lineDashOffset = -T * 40;
+  c.beginPath(); c.arc(z.x, z.y, z.r, 0, TAU); c.stroke();
+  c.setLineDash([]);
+  c.strokeStyle = '#4dff9a'; c.lineWidth = 8;
+  c.beginPath(); c.arc(z.x, z.y, z.r + 10, -Math.PI / 2, -Math.PI / 2 + TAU * k); c.stroke();
+  c.globalCompositeOperation = 'source-over';
+  c.font = `16px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillStyle = 'rgba(0,0,0,0.7)'; c.fillText('ЗОНА ' + Math.floor(k * 100) + '%', z.x + 1.5, z.y + 1.5);
+  c.fillStyle = '#4dff9a'; c.fillText('ЗОНА ' + Math.floor(k * 100) + '%', z.x, z.y);
+}
+
+function drawEliteMark(c, e) {
+  c.save();
+  c.translate(e.x, e.y);
+  c.rotate(G.time * 2);
+  c.strokeStyle = '#ffd23b'; c.lineWidth = 2.5;
+  c.setLineDash([8, 6]);
+  c.beginPath(); c.arc(0, 0, e.r + 9, 0, TAU); c.stroke();
+  c.setLineDash([]);
+  c.restore();
+  // корона
+  const y = e.y - e.r - 20;
+  c.fillStyle = '#ffd23b';
+  c.beginPath();
+  c.moveTo(e.x - 10, y + 6); c.lineTo(e.x - 10, y - 3); c.lineTo(e.x - 5, y + 1); c.lineTo(e.x, y - 6);
+  c.lineTo(e.x + 5, y + 1); c.lineTo(e.x + 10, y - 3); c.lineTo(e.x + 10, y + 6); c.closePath(); c.fill();
+}
+
+function drawChallenge(c) {
+  const ch = G.ch;
+  if (!ch) return;
+  const w = 290, x = VW - 24 - w, y = G.combo >= 2 ? 118 : 76;
+  const col = ch.s === 'done' ? '#4dff9a' : ch.s === 'fail' ? '#ff6b8e' : '#ffd23b';
+  hudPanel(c, x - 10, y - 8, w + 20, 76);
+  c.fillStyle = col; c.fillRect(x - 10, y - 8, 3, 76);
+  c.textAlign = 'left'; c.textBaseline = 'middle';
+  c.font = `11px ${FONT}`; c.fillStyle = col;
+  const head = ch.s === 'done' ? '✔ ЗАДАНИЕ ВЫПОЛНЕНО' : ch.s === 'fail' ? '✖ ПРОВАЛЕНО' + (ch.why ? ' · ' + ch.why : '') : 'ЗАДАНИЕ ВОЛНЫ';
+  c.fillText(head, x, y + 3);
+  if (ch.time !== null && ch.s === 'active') {
+    c.textAlign = 'right';
+    c.fillStyle = ch.time < 10 && Math.floor(performance.now() / 250) % 2 ? '#ff6b8e' : '#ffffff';
+    c.fillText('⏱ ' + Math.ceil(ch.time) + 'с', x + w, y + 3);
+  }
+  c.textAlign = 'left'; c.font = `14px ${FONT}`; c.fillStyle = '#ffffff';
+  c.fillText(ch.text, x, y + 22);
+  if (!ch.binary) {
+    hudBar(c, x, y + 36, w - 60, 7, ch.p / ch.goal, col, false);
+    c.textAlign = 'right'; c.font = `12px ${FONT}`; c.fillStyle = '#d4d1f2';
+    const pv = ch.zone ? Math.floor(ch.p) + '/' + ch.goal + 'с' : Math.floor(ch.p) + '/' + ch.goal;
+    c.fillText(pv, x + w, y + 40);
+  }
+  c.textAlign = 'left'; c.font = `11px ${FONT}`; c.fillStyle = '#9a96c8';
+  const rt = ch.rewardText || (CH_REWARDS[ch.reward] && CH_REWARDS[ch.reward].text) || '';
+  c.fillText('Награда: ' + rt, x, y + 57);
 }
