@@ -8,8 +8,98 @@ const Net = {
   peer: null, role: null, code: '', lobby: [], myId: 0, myName: '',
   conns: new Map(), hostConn: null, nextId: 1, started: false,
   events: [], snapT: 0, sendT: 0, pendU: false, pendW: null, pendC: 0, joinTimer: null,
+  transport: null, ws: null, lanConns: new Map(), lan: null,
 
   available() { return typeof Peer !== 'undefined'; },
+
+  // ---------- LAN: WebSocket через lan-server.ps1 ----------
+  lanUrl() {
+    const h = location.hostname;
+    if (h && h !== 'localhost' && h !== '127.0.0.1') return location.origin;
+    const ip = this.lan && this.lan.ips && this.lan.ips[0];
+    return ip ? `http://${ip}:${this.lan.port}` : location.origin;
+  },
+
+  openWs(onMsg, onOpen) {
+    const ws = (this.ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'));
+    ws.onopen = onOpen;
+    ws.onmessage = (e) => { if (this.ws === ws) onMsg(String(e.data)); };
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      if (this.role === 'client') this.hostLost();
+      else if (this.role === 'host') this.lanDown();
+    };
+    ws.onerror = () => { if (this.ws === ws && G.state === 'online') UI.netStatus('Не удалось связаться с LAN-сервером. Окно сервера открыто?', true); };
+    return ws;
+  },
+
+  createLan(name) {
+    this.leave();
+    this.role = 'host'; this.transport = 'lan';
+    this.myName = name; this.myId = 0; this.code = '';
+    UI.netStatus('Создаю комнату в локальной сети…');
+    this.openWs((m) => this.onLanHost(m), () => this.ws.send('host'));
+  },
+
+  onLanHost(m) {
+    if (m === 'hosted') {
+      this.lobby = [{ id: 0, name: this.myName }];
+      this.nextId = 1; this.started = false;
+      setState('lobby'); UI.showLobby();
+    } else if (m === 'hostbusy') {
+      UI.netStatus('В этой сети уже есть хост — нажми «Войти».', true);
+      this.leave();
+    } else if (m[0] === 'O') {
+      const lid = +m.slice(1);
+      const ws = this.ws;
+      const conn = {
+        lid, open: true, h: {},
+        on(ev, fn) { this.h[ev] = fn; },
+        emit(ev, a) { if (this.h[ev]) this.h[ev](a); },
+        send(obj) { if (ws.readyState === 1) ws.send('T' + lid + '|' + JSON.stringify(obj)); },
+        close() { if (ws.readyState === 1) ws.send('K' + lid); },
+      };
+      this.lanConns.set(lid, conn);
+      this.onConn(conn);
+    } else if (m[0] === 'C') {
+      const conn = this.lanConns.get(+m.slice(1));
+      if (conn) { conn.open = false; this.lanConns.delete(conn.lid); conn.emit('close'); }
+    } else if (m[0] === 'D') {
+      const bar = m.indexOf('|');
+      const conn = this.lanConns.get(+m.slice(1, bar));
+      if (conn) { try { conn.emit('data', JSON.parse(m.slice(bar + 1))); } catch (e) {} }
+    }
+  },
+
+  joinLan(name) {
+    this.leave();
+    this.role = 'client'; this.transport = 'lan';
+    this.myName = name;
+    UI.netStatus('Подключаюсь к хосту в локальной сети…');
+    this.openWs((m) => {
+      if (m === 'joined') {
+        const ws = this.ws;
+        this.hostConn = { get open() { return ws.readyState === 1; }, send(obj) { ws.send('D' + JSON.stringify(obj)); } };
+        this.hostConn.send({ t: 'hello', name });
+      } else if (m === 'nohost') {
+        UI.netStatus('Хоста пока нет — сначала кто-то должен нажать «Создать».', true);
+        this.leave();
+      } else if (m === 'X') {
+        this.hostLost();
+      } else if (m[0] === 'M') {
+        try { this.onClientData(JSON.parse(m.slice(1))); } catch (e) {}
+      }
+    }, () => this.ws.send('join'));
+  },
+
+  lanDown() {
+    this.leave();
+    G.mode = 'solo';
+    SFX.music(0.5);
+    initMenuScene();
+    setState('online');
+    UI.netStatus('Связь с LAN-сервером потеряна — окно сервера закрыто?', true);
+  },
 
   genCode() {
     const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -30,7 +120,7 @@ const Net = {
   create(name) {
     this.leave();
     if (!this.available()) { UI.netStatus('Библиотека PeerJS не загрузилась — нужен интернет.', true); return; }
-    this.role = 'host';
+    this.role = 'host'; this.transport = 'p2p';
     this.myName = name;
     this.myId = 0;
     this.code = this.genCode();
@@ -102,7 +192,13 @@ const Net = {
   },
 
   sendLobby() { this.broadcast({ t: 'lobby', l: this.lobby }); },
-  broadcast(m) { for (const c of this.conns.values()) if (c.open) { try { c.send(m); } catch (e) {} } },
+  broadcast(m) {
+    if (this.transport === 'lan') {
+      if (this.ws && this.ws.readyState === 1 && this.conns.size) this.ws.send('T*|' + JSON.stringify(m));
+      return;
+    }
+    for (const c of this.conns.values()) if (c.open) { try { c.send(m); } catch (e) {} }
+  },
   sendTo(id, m) { const c = this.conns.get(id); if (c && c.open) { try { c.send(m); } catch (e) {} } },
 
   startGame() {
@@ -132,7 +228,7 @@ const Net = {
     code = String(code || '').trim().toUpperCase();
     if (code.length < 4) { UI.netStatus('Введи код комнаты.', true); return; }
     if (!this.available()) { UI.netStatus('Библиотека PeerJS не загрузилась — нужен интернет.', true); return; }
-    this.role = 'client';
+    this.role = 'client'; this.transport = 'p2p';
     this.myName = name;
     UI.netStatus('Подключаюсь к комнате ' + code + '…');
     const peer = (this.peer = new Peer({ debug: 1 }));
@@ -147,7 +243,10 @@ const Net = {
     peer.on('error', (err) => { if (this.peer === peer) { UI.netStatus(this.errText(err), true); this.leave(); } });
     clearTimeout(this.joinTimer);
     this.joinTimer = setTimeout(() => {
-      if (this.role === 'client' && G.state === 'online') { UI.netStatus('Не удалось подключиться. Проверь код и интернет.', true); this.leave(); }
+      if (this.role === 'client' && G.state === 'online') {
+        UI.netStatus('Комната найдена, но прямое соединение не установилось (часто мешает роутер). Попробуй режим «По одному Wi-Fi» ниже.', true);
+        this.leave();
+      }
     }, 12000);
   },
 
@@ -230,6 +329,9 @@ const Net = {
     this.started = false;
     clearTimeout(this.joinTimer);
     if (had) { try { this.peer && this.peer.destroy(); } catch (e) {} }
+    if (this.ws) { const w = this.ws; this.ws = null; try { w.close(); } catch (e) {} }
+    this.transport = null;
+    this.lanConns.clear();
     this.peer = null;
     this.conns.clear();
     this.hostConn = null;

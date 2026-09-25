@@ -21,7 +21,7 @@
         <button id="btnPlay" class="btn primary">ОДИН ИГРОК</button>
         <div class="btn-row tight">
           <button id="btnLocal" class="btn secondary">КООП НА ОДНОМ ПК</button>
-          <button id="btnOnline" class="btn secondary">ОНЛАЙН ДО 4</button>
+          <button id="btnOnline" class="btn secondary">ОНЛАЙН / WI-FI</button>
         </div>
       </div>
       <div class="best">Рекорд: <b id="bestScore">0</b> · Лучшая волна: <b id="bestWave">0</b></div>
@@ -86,9 +86,28 @@
           <button id="btnJoin" class="btn">ВОЙТИ</button>
         </div>
       </div>
+      <div class="online-box lan-box">
+        <h3>📶 По одному Wi-Fi <span class="tag">без интернета · надёжнее</span></h3>
+        <div id="lanOn" style="display:none">
+          <p>Игра открыта с LAN-сервера <b id="lanAddr"></b>.<br>Один нажимает «Создать», остальные — «Войти».</p>
+          <div class="btn-row tight">
+            <button id="btnLanCreate" class="btn">СОЗДАТЬ</button>
+            <button id="btnLanJoin" class="btn">ВОЙТИ</button>
+          </div>
+        </div>
+        <div id="lanOff">
+          <ol class="lan-steps">
+            <li>Скачай игру на ноутбук, который будет хостом, и распакуй.</li>
+            <li>Запусти в папке <b>«Запустить LAN-сервер.bat»</b> и разреши доступ к сети, если Windows спросит.</li>
+            <li>Он покажет адрес вида <b>http://192.168.x.x:8777</b> — открой его в браузере на всех ноутбуках.</li>
+            <li>Здесь появятся кнопки «Создать» и «Войти».</li>
+          </ol>
+          <a class="btn secondary small" href="https://github.com/backwardzz/neon-storm/archive/refs/heads/main.zip">СКАЧАТЬ ИГРУ (ZIP)</a>
+        </div>
+      </div>
       <div id="netStatus" class="net-status"></div>
       <div id="netLibWarn" class="net-status err" style="display:none">Библиотека PeerJS не загрузилась. Для онлайна нужен интернет.</div>
-      <p class="hint small-note">Соединение идёт напрямую между игроками (WebRTC). Для поиска комнаты используется бесплатный сервер PeerJS, поэтому нужен интернет. Хост держит всю игру — не сворачивай вкладку хоста.</p>
+      <p class="hint small-note">Комнаты по коду работают через интернет (WebRTC + бесплатный сервер PeerJS) и иногда блокируются роутером — тогда используй Wi-Fi-режим. Хост держит всю игру — не сворачивай вкладку хоста.</p>
       <button id="btnOnlineBack" class="btn secondary small">НАЗАД</button>
     </div>
   </div>
@@ -98,7 +117,7 @@
     <div class="panel">
       <h2 class="title">КОМНАТА</h2>
       <div class="code-box">
-        <span class="code-label">КОД</span>
+        <span id="codeLabel" class="code-label">КОД</span>
         <span id="lobbyCode" class="code-value">-----</span>
         <button id="btnCopy" class="btn secondary small">КОПИРОВАТЬ</button>
       </div>

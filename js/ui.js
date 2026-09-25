@@ -82,15 +82,25 @@ const UI = {
 
   showLobby() {
     const host = Net.role === 'host';
-    this.$('lobbyCode').textContent = Net.code;
+    const lan = Net.transport === 'lan';
+    this.$('lobbyCode').textContent = lan ? Net.lanUrl().replace(/^https?:\/\//, '') : Net.code;
+    this.$('lobbyCode').classList.toggle('addr', lan);
+    this.$('codeLabel').textContent = lan ? 'АДРЕС' : 'КОД';
     this.$('lobbyList').innerHTML = Net.lobby.map((l) =>
       `<li style="--pc:${PCOLORS[l.id % 4]}"><span class="dot"></span>${escapeHtml(l.name)}${l.id === 0 ? ' <em>хост</em>' : ''}${l.id === (host ? 0 : Net.myId) ? ' <em>ты</em>' : ''}</li>`).join('');
     for (let i = Net.lobby.length; i < NET_MAX_PLAYERS; i++) this.$('lobbyList').innerHTML += '<li class="empty">свободное место</li>';
     this.$('btnStart').style.display = host ? '' : 'none';
     this.$('lobbyWait').style.display = host ? 'none' : '';
-    this.$('lobbyHint').textContent = host
-      ? 'Отправь код друзьям — они выбирают «Онлайн → Войти». Можно начать и одному.'
-      : 'Ждём, пока хост начнёт игру…';
+    this.$('lobbyHint').textContent = !host ? 'Ждём, пока хост начнёт игру…'
+      : lan ? 'На других ноутбуках открой этот адрес в браузере → «Онлайн / Wi-Fi» → «Войти» в блоке Wi-Fi.'
+        : 'Отправь код друзьям — они выбирают «Онлайн → Войти». Можно начать и одному.';
+  },
+
+  updateLan() {
+    const on = !!Net.lan;
+    this.$('lanOn').style.display = on ? '' : 'none';
+    this.$('lanOff').style.display = on ? 'none' : '';
+    if (on) this.$('lanAddr').textContent = Net.lanUrl().replace(/^https?:\/\//, '');
   },
 
   playerName() {
@@ -116,8 +126,10 @@ const UI = {
     click('btnOnlineBack', () => { Net.leave(); setState('menu'); });
     click('btnStart', () => Net.startGame());
     click('btnLobbyLeave', () => { Net.leave(); setState('online'); });
+    click('btnLanCreate', () => Net.createLan(this.playerName()));
+    click('btnLanJoin', () => Net.joinLan(this.playerName()));
     click('btnCopy', () => {
-      try { navigator.clipboard.writeText(Net.code); this.$('btnCopy').textContent = 'СКОПИРОВАНО'; setTimeout(() => (this.$('btnCopy').textContent = 'КОПИРОВАТЬ'), 1500); } catch (e) {}
+      try { navigator.clipboard.writeText(Net.transport === 'lan' ? Net.lanUrl() : Net.code); this.$('btnCopy').textContent = 'СКОПИРОВАНО'; setTimeout(() => (this.$('btnCopy').textContent = 'КОПИРОВАТЬ'), 1500); } catch (e) {}
     });
     click('btnRetry', restartGame);
     click('btnResume', resumeGame);
@@ -133,6 +145,14 @@ const UI = {
     this.$('nameInput').value = saved || 'Пилот-' + randi(10, 99);
 
     if (!Net.available()) this.$('netLibWarn').style.display = 'block';
+
+    // игра открыта с lan-server.ps1? — тогда включаем Wi-Fi-режим
+    if (location.protocol.startsWith('http')) {
+      fetch('lan.json', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (j && j.lan) { Net.lan = j; this.updateLan(); } })
+        .catch(() => {});
+    }
 
     // первое взаимодействие запускает музыку меню
     const kick = () => { SFX.init(); if (MENU_STATES.includes(G.state)) SFX.music(0.5); removeEventListener('pointerdown', kick); removeEventListener('keydown', kick); };
