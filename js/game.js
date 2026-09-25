@@ -1489,8 +1489,37 @@ function updateMenu(dt) {
 }
 
 // ================= ВВОД / ЦИКЛ =================
+// уровни графики: 0 — высокая, 1 — средняя, 2 — низкая (понижается сама, если лагает)
+const QUALITY = [
+  { name: 'ВЫСОКАЯ', dpr: 1.25, parts: 1600, texts: 70 },
+  { name: 'СРЕДНЯЯ', dpr: 1, parts: 1000, texts: 45 },
+  { name: 'НИЗКАЯ', dpr: 0.75, parts: 600, texts: 30 },
+];
+let quality = 0;
+try { quality = clamp(parseInt(localStorage.getItem('ns_quality'), 10) || 0, 0, 2); } catch (e) {}
+const perf = { ema: 1 / 60, slowT: 0 };
+
+function setQuality(q, note) {
+  quality = clamp(q, 0, 2);
+  try { localStorage.setItem('ns_quality', String(quality)); } catch (e) {}
+  resize();
+  if (note && G.me) FX.text(G.me.x, G.me.y - 50, 'Графика: ' + QUALITY[quality].name, '#b9b3ff', 16, true);
+}
+
+// следим за FPS и сами снижаем качество, если игра не вытягивает
+function trackPerf(raw) {
+  if (G.state !== 'playing' || document.hidden) return;
+  raw = Math.min(raw, 0.1);
+  perf.ema = perf.ema * 0.95 + raw * 0.05;
+  if (perf.ema > 0.024) perf.slowT += raw; else perf.slowT = Math.max(0, perf.slowT - raw * 0.5);
+  if (perf.slowT > 2.5 && quality < 2) { perf.slowT = 0; perf.ema = 1 / 60; setQuality(quality + 1, true); }
+}
+
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const Q = QUALITY[quality];
+  DPR = Math.min(window.devicePixelRatio || 1, Q.dpr);
+  FX.max = Q.parts;
+  FX.maxTexts = Q.texts;
   VW = window.innerWidth; VH = window.innerHeight;
   canvas.width = Math.floor(VW * DPR); canvas.height = Math.floor(VH * DPR);
   canvas.style.width = VW + 'px'; canvas.style.height = VH + 'px';
@@ -1500,6 +1529,7 @@ function resize() {
 
 function onKey(code) {
   if (code === 'KeyM') { SFX.toggleMute(); UI.updateMute(); }
+  if (code === 'KeyG') setQuality((quality + 1) % QUALITY.length, true);
   if (code === 'Escape' || code === 'KeyP') {
     if (G.state === 'playing') pauseGame();
     else if (G.state === 'paused') resumeGame();
@@ -1542,8 +1572,10 @@ function simRunning() {
 
 let lastT = performance.now();
 function frame(now) {
-  const rdt = Math.min(0.05, (now - lastT) / 1000);
+  const raw = (now - lastT) / 1000;
+  const rdt = Math.min(0.05, raw);
   lastT = now;
+  trackPerf(raw);
   pollPads();
   const gp = getPad();
   if (gp) {

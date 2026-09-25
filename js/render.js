@@ -67,7 +67,7 @@ function drawFloor(c, v) {
   c.fillStyle = '#0a0818';
   c.fillRect(0, 0, G.W, G.H);
   const l = Math.max(0, v.l), t = Math.max(0, v.t), r = Math.min(G.W, v.r), b = Math.min(G.H, v.b);
-  if (r > l && b > t) c.drawImage(Decals.canvas, l, t, r - l, b - t, l, t, r - l, b - t);
+  Decals.draw(c, v);
 
   c.lineWidth = 1;
   c.strokeStyle = 'rgba(110,80,255,0.09)';
@@ -518,9 +518,8 @@ function hudBar(c, x, y, w, h, f, col, glow) {
   c.fillRect(x, y, w, h);
   f = clamp(f, 0, 1);
   c.fillStyle = col;
-  if (glow) { c.shadowColor = col; c.shadowBlur = 12 + 6 * Math.sin(performance.now() / 120); }
   c.fillRect(x, y, w * f, h);
-  c.shadowBlur = 0;
+  if (glow) { c.globalAlpha = 0.25 + 0.2 * Math.sin(performance.now() / 120); c.fillRect(x - 2, y - 2, w * f + 4, h + 4); c.globalAlpha = 1; }
   c.fillStyle = 'rgba(255,255,255,0.28)';
   c.fillRect(x, y, w * f, Math.max(1, h * 0.3));
 }
@@ -578,7 +577,7 @@ function drawHUD(c) {
   c.textAlign = 'center';
   c.font = `26px ${FONT}`;
   c.fillStyle = '#fff';
-  c.shadowColor = '#b46bff'; c.shadowBlur = 14;
+ 
   c.fillText(G.wave > 0 ? `ВОЛНА ${G.wave}` : 'ГОТОВЬСЯ', VW / 2, 32);
   c.shadowBlur = 0;
   c.font = `13px ${FONT}`;
@@ -593,7 +592,7 @@ function drawHUD(c) {
   if (multi && p.dead && !(G.dying > 0)) {
     c.font = `22px ${FONT}`;
     c.fillStyle = '#ff6b8e';
-    c.shadowColor = '#ff3b6b'; c.shadowBlur = 14;
+   
     c.fillText('ТЫ ПОВЕРЖЕН', VW / 2, VH * 0.68);
     c.shadowBlur = 0;
     c.font = `14px ${FONT}`; c.fillStyle = '#d4d1f2';
@@ -613,7 +612,7 @@ function drawHUD(c) {
   // правая панель — счёт
   c.textAlign = 'right';
   c.font = `30px ${FONT}`;
-  c.fillStyle = '#fff'; c.shadowColor = '#33ffff'; c.shadowBlur = 12;
+  c.fillStyle = '#fff';
   c.fillText(G.score.toLocaleString('ru-RU'), VW - 24, 36);
   c.shadowBlur = 0;
   c.font = `12px ${FONT}`; c.fillStyle = '#8a86b8';
@@ -639,7 +638,6 @@ function drawHUD(c) {
     c.fillStyle = cur ? rgba(wp.color, 0.18) : 'rgba(10,8,24,0.65)';
     c.strokeStyle = cur ? wp.color : owned ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.08)';
     c.lineWidth = cur ? 2 : 1;
-    if (cur) { c.shadowColor = wp.color; c.shadowBlur = 14; }
     c.beginPath(); c.roundRect(sx, sy, sw, shh, 8); c.fill(); c.stroke();
     c.shadowBlur = 0;
     c.font = `11px ${FONT}`; c.textAlign = 'left'; c.fillStyle = owned ? '#9a96c8' : '#4a4670';
@@ -726,11 +724,11 @@ function drawBanner(c) {
   c.textAlign = 'center'; c.textBaseline = 'middle';
   c.font = `${Math.round(Math.min(72, VW / 11))}px ${FONT}`;
   c.fillStyle = '#fff';
-  c.shadowColor = b.color; c.shadowBlur = 30;
+ 
   c.fillText(b.title, 0, 0);
   if (b.sub) {
     c.font = `${Math.round(Math.min(20, VW / 40))}px ${FONT}`;
-    c.shadowBlur = 10;
+    c.shadowBlur = 0;
     c.fillStyle = b.color;
     c.fillText(b.sub, 0, 52);
   }
@@ -750,7 +748,7 @@ function drawIndicators(c) {
     const a = Math.atan2(sy - VH / 2, sx - VW / 2);
     c.save();
     c.translate(cx, cy); c.rotate(a);
-    c.fillStyle = it.color; c.shadowColor = it.color; c.shadowBlur = 12;
+    c.fillStyle = it.color;
     c.globalAlpha = 0.6 + 0.4 * Math.sin(performance.now() / 150);
     c.beginPath(); c.moveTo(it.s, 0); c.lineTo(-it.s * 0.7, it.s * 0.7); c.lineTo(-it.s * 0.3, 0); c.lineTo(-it.s * 0.7, -it.s * 0.7); c.closePath(); c.fill();
     c.restore();
@@ -762,7 +760,7 @@ function drawCrosshair(c) {
   const gap = 7 + p.recoil * 9;
   c.save();
   c.strokeStyle = w.color; c.lineWidth = 2;
-  c.shadowColor = w.color; c.shadowBlur = 8;
+ 
   c.beginPath();
   for (let k = 0; k < 4; k++) {
     const a = (k * Math.PI) / 2 + Math.PI / 4;

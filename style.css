@@ -35,7 +35,7 @@ body.ingame canvas { cursor: none; }
   overflow-y: auto;
 }
 .screen.active { display: flex; }
-.screen.dim { background: rgba(4, 3, 10, 0.62); backdrop-filter: blur(3px); }
+.screen.dim { background: rgba(4, 3, 10, 0.78); }
 
 .panel {
   background: var(--panel);
@@ -49,7 +49,7 @@ body.ingame canvas { cursor: none; }
   animation: pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1);
   margin: auto;
 }
-.menu-panel { background: rgba(8, 6, 20, 0.72); backdrop-filter: blur(4px); }
+.menu-panel { background: rgba(8, 6, 20, 0.86); }
 
 .logo {
   font-family: 'Russo One', sans-serif;

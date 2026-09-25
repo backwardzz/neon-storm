@@ -30,9 +30,11 @@ function drawGlow(c, x, y, rad, color, alpha = 1) {
 const FX = {
   parts: [],
   texts: [],
+  max: 1600,      // лимиты снижаются автоматически на слабом железе
+  maxTexts: 70,
 
   add(p) {
-    if (this.parts.length >= 2600) return;
+    if (this.parts.length >= this.max) return;
     p.max = p.life;
     if (p.drag === undefined) p.drag = 3;
     this.parts.push(p);
@@ -77,7 +79,7 @@ const FX = {
   },
 
   text(x, y, str, color, size, pop) {
-    if (this.texts.length > 110) this.texts.shift();
+    if (this.texts.length > this.maxTexts) this.texts.shift();
     this.texts.push({ x, y, str: String(str), color, size: size || 14, life: 0.85, max: 0.85, vy: -70, pop: !!pop });
   },
 
@@ -126,17 +128,21 @@ const FX = {
     // остальное — аддитивное свечение
     c.globalCompositeOperation = 'lighter';
     c.lineCap = 'round';
+    // искры группируются по цвету/толщине/прозрачности и рисуются одним stroke на группу
+    const groups = this._groups || (this._groups = new Map());
+    for (const g of groups.values()) g.length = 0;
     for (const p of P) {
       if (p.type === 'smoke' || p.type === 'shard') continue;
       if (p.x < v.l - 200 || p.x > v.r + 200 || p.y < v.t - 200 || p.y > v.b + 200) continue;
       const k = p.life / p.max;
       switch (p.type) {
-        case 'spark':
-          c.globalAlpha = k;
-          c.strokeStyle = p.color;
-          c.lineWidth = p.size;
-          c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(p.x - p.vx * 0.035, p.y - p.vy * 0.035); c.stroke();
+        case 'spark': {
+          const key = p.color + '|' + p.size + '|' + Math.ceil(k * 4);
+          let g = groups.get(key);
+          if (!g) { g = []; groups.set(key, g); }
+          g.push(p);
           break;
+        }
         case 'dot':
           drawGlow(c, p.x, p.y, p.size * (0.4 + k * 0.6), p.color, k);
           break;
@@ -156,6 +162,16 @@ const FX = {
           break;
       }
     }
+    for (const [key, g] of groups) {
+      if (!g.length) continue;
+      const parts = key.split('|');
+      c.strokeStyle = parts[0];
+      c.lineWidth = +parts[1];
+      c.globalAlpha = +parts[2] / 4;
+      c.beginPath();
+      for (const p of g) { c.moveTo(p.x, p.y); c.lineTo(p.x - p.vx * 0.035, p.y - p.vy * 0.035); }
+      c.stroke();
+    }
     c.globalAlpha = 1;
     c.globalCompositeOperation = 'source-over';
   },
@@ -163,15 +179,16 @@ const FX = {
   drawTexts(c) {
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    c.lineWidth = 3;
-    c.lineJoin = 'round';
-    c.strokeStyle = 'rgba(0,0,0,0.85)';
+    let font = '';
     for (const t of this.texts) {
       const k = t.life / t.max;
       c.globalAlpha = Math.min(1, k * 2.5);
       const s = t.pop ? t.size * (1 + Math.max(0, k - 0.7) * 2.5) : t.size;
-      c.font = `${Math.round(s)}px ${FONT}`;
-      c.strokeText(t.str, t.x, t.y);
+      const f = `${Math.round(s)}px ${FONT}`;
+      if (f !== font) { c.font = f; font = f; }
+      // дешёвая тень вместо strokeText
+      c.fillStyle = 'rgba(0,0,0,0.85)';
+      c.fillText(t.str, t.x + 1.5, t.y + 1.5);
       c.fillStyle = t.color;
       c.fillText(t.str, t.x, t.y);
     }
@@ -180,41 +197,76 @@ const FX = {
 };
 
 // ---------- следы на полу ----------
+// Пол разбит на плитки в половинном разрешении: при каждом убийстве
+// в видеокарту перезаливается только одна маленькая плитка, а не вся арена.
 const Decals = {
-  canvas: null,
-  ctx: null,
+  T: 256, S: 0.5, tiles: [], cols: 0, rows: 0,
   init(w, h) {
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = w; this.canvas.height = h;
-    this.ctx = this.canvas.getContext('2d');
+    this.cols = Math.ceil((w * this.S) / this.T);
+    this.rows = Math.ceil((h * this.S) / this.T);
+    this.tiles = [];
+    for (let i = 0; i < this.cols * this.rows; i++) {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = this.T;
+      this.tiles.push({ cv, c: cv.getContext('2d'), used: false });
+    }
   },
-  clear() { this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height); },
+  clear() { for (const t of this.tiles) { if (t.used) t.c.clearRect(0, 0, this.T, this.T); t.used = false; } },
+  // вызывает fn(ctx) для каждой плитки, задетой кругом (x, y, r), с мировой системой координат
+  paint(x, y, r, fn) {
+    const span = this.T / this.S;
+    const c0 = Math.max(0, Math.floor((x - r) / span)), c1 = Math.min(this.cols - 1, Math.floor((x + r) / span));
+    const r0 = Math.max(0, Math.floor((y - r) / span)), r1 = Math.min(this.rows - 1, Math.floor((y + r) / span));
+    for (let ty = r0; ty <= r1; ty++) {
+      for (let tx = c0; tx <= c1; tx++) {
+        const t = this.tiles[ty * this.cols + tx];
+        t.c.setTransform(this.S, 0, 0, this.S, -tx * this.T, -ty * this.T);
+        fn(t.c);
+        t.used = true;
+      }
+    }
+  },
   splat(x, y, color, r) {
-    const c = this.ctx;
-    for (let i = 0; i < 7; i++) {
-      c.fillStyle = rgba(color, +rand(0.06, 0.16).toFixed(2));
-      c.beginPath(); c.arc(x + rand(-r, r) * 0.7, y + rand(-r, r) * 0.7, rand(r * 0.15, r * 0.55), 0, TAU); c.fill();
-    }
-    for (let i = 0; i < 6; i++) {
-      const a = rand(0, TAU), d = rand(r, r * 2.4);
-      c.fillStyle = rgba(color, 0.2);
-      c.beginPath(); c.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, rand(1.5, 4), 0, TAU); c.fill();
-    }
+    const blobs = [];
+    for (let i = 0; i < 5; i++) blobs.push([x + rand(-r, r) * 0.7, y + rand(-r, r) * 0.7, rand(r * 0.2, r * 0.6), +rand(0.07, 0.16).toFixed(2)]);
+    for (let i = 0; i < 4; i++) { const a = rand(0, TAU), d = rand(r, r * 2.4); blobs.push([x + Math.cos(a) * d, y + Math.sin(a) * d, rand(2, 4.5), 0.2]); }
+    this.paint(x, y, r * 2.6, (c) => {
+      for (const b of blobs) {
+        c.fillStyle = rgba(color, b[3]);
+        c.beginPath(); c.arc(b[0], b[1], b[2], 0, TAU); c.fill();
+      }
+    });
   },
   scorch(x, y, r) {
-    const c = this.ctx;
-    const g = c.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, 'rgba(0,0,0,0.6)');
-    g.addColorStop(0.5, 'rgba(40,10,20,0.35)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    c.fillStyle = g;
-    c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+    this.paint(x, y, r, (c) => {
+      const g = c.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, 'rgba(0,0,0,0.6)');
+      g.addColorStop(0.5, 'rgba(40,10,20,0.35)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g;
+      c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+    });
   },
   fade() {
-    const c = this.ctx;
-    c.globalCompositeOperation = 'destination-out';
-    c.fillStyle = 'rgba(0,0,0,0.08)';
-    c.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    c.globalCompositeOperation = 'source-over';
+    for (const t of this.tiles) {
+      if (!t.used) continue;
+      const c = t.c;
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.globalCompositeOperation = 'destination-out';
+      c.fillStyle = 'rgba(0,0,0,0.1)';
+      c.fillRect(0, 0, this.T, this.T);
+      c.globalCompositeOperation = 'source-over';
+    }
+  },
+  draw(c, v) {
+    const span = this.T / this.S;
+    const c0 = Math.max(0, Math.floor(v.l / span)), c1 = Math.min(this.cols - 1, Math.floor(v.r / span));
+    const r0 = Math.max(0, Math.floor(v.t / span)), r1 = Math.min(this.rows - 1, Math.floor(v.b / span));
+    for (let ty = r0; ty <= r1; ty++) {
+      for (let tx = c0; tx <= c1; tx++) {
+        const t = this.tiles[ty * this.cols + tx];
+        if (t.used) c.drawImage(t.cv, tx * span, ty * span, span, span);
+      }
+    }
   },
 };
