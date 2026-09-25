@@ -98,6 +98,16 @@ const SFX = (() => {
     arm() { tone({ type: 'square', f: 1500, dur: 0.05, vol: 0.08 }); tone({ type: 'square', f: 1500, dur: 0.05, vol: 0.08, t: 0.12 }); },
     chain() { if (!throttle('ch', 60)) return; noise({ dur: 0.12, vol: 0.2, ft: 'highpass', f: 4000 }); tone({ type: 'sawtooth', f: 1600, f2: 400, dur: 0.1, vol: 0.07 }); },
     bounce() { if (!throttle('bo', 50)) return; tone({ type: 'sine', f: 900, f2: 500, dur: 0.06, vol: 0.06 }); },
+    laser() { if (!throttle('lz', 95)) return; tone({ type: 'sawtooth', f: 1300 + Math.random() * 200, dur: 0.1, vol: 0.035, lp: 3000 }); },
+    flamer() { if (!throttle('fl', 80)) return; noise({ dur: 0.14, vol: 0.14, ft: 'bandpass', f: 700, f2: 400, q: 0.8 }); },
+    saw() { tone({ type: 'square', f: 280, f2: 700, dur: 0.22, vol: 0.08, lp: 2000 }); noise({ dur: 0.18, vol: 0.1, ft: 'highpass', f: 3000 }); },
+    cluster() { tone({ type: 'sine', f: 220, f2: 80, dur: 0.2, vol: 0.3 }); noise({ dur: 0.15, vol: 0.18, f: 1500, f2: 300 }); },
+    tesla() { if (!throttle('ts', 70)) return; noise({ dur: 0.1, vol: 0.2, ft: 'highpass', f: 4500 }); tone({ type: 'sawtooth', f: 1900, f2: 300, dur: 0.12, vol: 0.08 }); },
+    tele() { if (!throttle('tp', 120)) return; tone({ type: 'sine', f: 300, f2: 1600, dur: 0.25, vol: 0.14 }); tone({ type: 'triangle', f: 600, f2: 2400, dur: 0.2, vol: 0.06 }); },
+    buff() { [659, 880, 1175, 1568].forEach((f, i) => tone({ type: 'square', f, dur: 0.08, vol: 0.08, t: i * 0.05 })); },
+    hack() { if (!throttle('hk', 140)) return; tone({ type: 'square', f: 900 + Math.random() * 600, dur: 0.04, vol: 0.05 }); },
+    turret() { if (!throttle('tu', 70)) return; tone({ type: 'square', f: 750, f2: 300, dur: 0.06, vol: 0.06 }); },
+    zap() { noise({ dur: 0.5, vol: 0.3, ft: 'highpass', f: 2500, f2: 6000 }); tone({ type: 'sawtooth', f: 90, dur: 0.5, vol: 0.12 }); },
     slam() { noise({ dur: 0.5, vol: 0.5, f: 800, f2: 60 }); tone({ type: 'sine', f: 70, f2: 25, dur: 0.4, vol: 0.6 }); },
   };
 

@@ -88,6 +88,22 @@ const CHALLENGES = {
     ok: (info, n) => n >= 3,
     make() { return { goal: 1, text: 'Убей элитного врага за 35 сек', time: 35, elite: true, binary: true }; },
   },
+  // --- интерактивные задания на карте ---
+  terminals: {
+    w: 3, hard: false,
+    ok: (info, n) => n >= 2,
+    make() { return { goal: 3, text: 'Взломай 3 терминала (стой рядом)', spawn: 'terminals' }; },
+  },
+  cells: {
+    w: 3, hard: true,
+    ok: (info, n) => n >= 3,
+    make() { return { goal: 3, text: 'Доставь 3 энергоячейки в реактор', spawn: 'cells' }; },
+  },
+  bomb: {
+    w: 2, hard: true,
+    ok: (info, n) => n >= 4,
+    make() { return { goal: 1, text: 'Обезвредь бомбу до взрыва', spawn: 'bomb', time: 40, binary: true }; },
+  },
   boss: {
     w: 0, hard: true,
     ok: () => false,
@@ -117,6 +133,8 @@ const Ch = {
     c.reward = def.hard ? 'upgrade' : pick(['crate', 'crate', 'heal', 'upgrade']);
     c.bonus = 250 + n * 60;
     G.ch = c;
+    World.clearMission();
+    if (c.spawn) World.spawnMission(c.spawn);
 
     if (c.elite) {
       const pos = freePos(450, 40) || { x: rand(200, G.W - 200), y: rand(200, G.H - 200) };
@@ -160,6 +178,9 @@ const Ch = {
             fx('text', Math.round(e.x), Math.round(e.y - 40), 'Элита сбежала!', '#ffd23b', 18, 1);
           }
           this.fail('Элита сбежала');
+        } else if (c.id === 'bomb') {
+          World.bombBlow();
+          this.fail('Бомба взорвалась');
         } else this.fail('Время вышло');
         return;
       }
@@ -187,6 +208,12 @@ const Ch = {
     G.score += c.bonus;
     G.stats.ch++;
     CH_REWARDS[c.reward].give();
+    if (c.id === 'cells') {
+      // реактор даёт импульс, сметающий врагов
+      const re = G.objs.find((o) => o.kind === 'reactor');
+      if (re) { triggerNova(re.x, re.y, 950, 260 * (1 + G.wave * 0.05), true, '#ffb13b', G.players[0]); fx('shake', 20); fx('flash', 0.35); }
+    }
+    if (c.spawn) World.clearMission();
     fx('banner', 'ЗАДАНИЕ ВЫПОЛНЕНО', CH_REWARDS[c.reward].text + ' · +' + c.bonus + ' очков', 1.8, '#4dff9a');
     fx('sfx', 'weapon');
     fx('flash', 0.15);
@@ -197,6 +224,7 @@ const Ch = {
     if (c.s !== 'active') return;
     c.s = 'fail';
     c.why = why;
+    if (c.spawn) World.clearMission();
     fx('sfx', 'hurt');
     const p = G.me || G.players[0];
     if (p) fx('text', Math.round(p.x), Math.round(p.y - 50), 'Задание провалено: ' + why, '#ff6b8e', 16, 1);
@@ -244,6 +272,12 @@ const ACHIEVEMENTS = [
   { id: 'coop', icon: '🤝', name: 'Плечом к плечу', desc: 'Сыграй в кооп на одном ПК', goal: 1, get: (m) => m.t.local },
   { id: 'online', icon: '🌐', name: 'По сети', desc: 'Сыграй с друзьями по сети', goal: 1, get: (m) => m.t.online },
   { id: 'runs10', icon: '🔁', name: 'Упорство', desc: 'Сыграй 10 забегов', goal: 10, get: (m) => m.t.runs },
+  { id: 'lz', icon: '🔦', name: 'Лучемёт', desc: '300 убийств лазером', goal: 300, get: (m) => m.t.wk.laser || 0 },
+  { id: 'fl', icon: '🔥', name: 'Пироман', desc: '300 убийств огнём (огнемёт + поджог)', goal: 300, get: (m) => (m.t.wk.flamer || 0) + (m.t.wk.burn || 0) },
+  { id: 'ts', icon: '⚡', name: 'Повелитель молний', desc: '300 убийств теслой', goal: 300, get: (m) => m.t.wk.tesla || 0 },
+  { id: 'sw', icon: '💿', name: 'Бумеранг', desc: '200 убийств дископилом', goal: 200, get: (m) => m.t.wk.saw || 0 },
+  { id: 'tur', icon: '🛰️', name: 'Инженер', desc: 'Захвати 10 турелей', goal: 10, get: (m) => m.t.turrets },
+  { id: 'sec', icon: '🗺️', name: 'Путешественник', desc: 'Пройди 5 секторов', goal: 5, get: (m) => m.t.sectors },
 ];
 
 const RAINBOW = ['#ff4d6d', '#ff7a1a', '#ffb13b', '#ffe23b', '#a6ff4d', '#4dff9a', '#33ffff', '#4db8ff', '#7d7dff', '#b46bff', '#ff4dd2', '#ff2d95'];
@@ -282,7 +316,7 @@ const Meta = {
     let d = null;
     try { d = JSON.parse(localStorage.getItem('ns_meta')); } catch (e) {}
     d = d || {};
-    d.t = Object.assign({ kills: 0, bosses: 0, ch: 0, expl: 0, novas: 0, runs: 0, local: 0, online: 0, wk: {} }, d.t || {});
+    d.t = Object.assign({ kills: 0, bosses: 0, ch: 0, expl: 0, novas: 0, runs: 0, local: 0, online: 0, turrets: 0, sectors: 0, wk: {} }, d.t || {});
     d.t.wk = d.t.wk || {};
     d.b = Object.assign({ wave: 0, combo: 0, score: 0 }, d.b || {});
     d.done = Array.isArray(d.done) ? d.done : [];
@@ -307,6 +341,8 @@ const Meta = {
     t.ch += run.ch || 0;
     t.expl += run.expl || 0;
     t.novas += run.novas || 0;
+    t.turrets += run.turrets || 0;
+    t.sectors += run.sectors || 0;
     t.runs++;
     if (run.mode === 'local') t.local++;
     if (run.mode === 'host' || run.mode === 'client') t.online++;
@@ -329,6 +365,7 @@ function buildRun() {
   const s = G.stats || {};
   return {
     kills: G.kills, bosses: s.bosses || 0, ch: s.ch || 0, expl: s.expl || 0, novas: s.novas || 0,
+    turrets: s.turrets || 0, sectors: s.sectors || 0,
     wk: s.wk || {}, wave: G.wave, combo: G.maxCombo, score: G.score, mode: G.mode,
   };
 }

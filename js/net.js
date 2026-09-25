@@ -207,8 +207,8 @@ const Net = {
     this.started = true;
     G.mode = 'host';
     newGame(this.lobby.map((l) => ({ id: l.id, name: l.name, ctl: l.id === 0 ? 'kbm' : 'net', skin: l.skin })));
-    const walls = G.walls.map((w) => [w.x, w.y, w.w, w.h]);
-    for (const [id, c] of this.conns) if (c.open) c.send({ t: 'start', you: id, walls, players: this.lobby });
+    const map = World.netMapMsg();
+    for (const [id, c] of this.conns) if (c.open) c.send({ t: 'start', you: id, mapId: map.mapId, walls: map.walls, players: this.lobby });
     this.events = [];
     this.snapT = 0;
   },
@@ -269,6 +269,12 @@ const Net = {
         break;
       case 'start': clientStart(d); break;
       case 's': if (G.mode === 'client') applySnapshot(d); break;
+      case 'map':
+        if (G.mode === 'client') {
+          World.applyNetMap(d.mapId, d.walls);
+          G.pickups = []; G.bullets = []; G.ebullets = [];
+        }
+        break;
       case 'ups': if (G.mode === 'client') clientShowUpgrades(d.c); break;
       case 'over':
         if (G.mode === 'client') {
@@ -356,15 +362,17 @@ function buildSnapshot() {
       WEAPON_ORDER.indexOf(p.cur),
       WEAPON_ORDER.map((id) => (!p.owned.includes(id) ? -2 : p.ammo[id] === Infinity ? -1 : p.ammo[id])),
       p.dead ? 1 : 0, p.invuln > 0 ? 1 : 0, isDashing(p) ? 1 : 0, r0(p.speed), r2(p.dashMax), p.drones, r0(p.magnet), r2(p.revive), p.tp, p.ups,
+      r1(p.rage), r1(p.haste), r0(p.shield), p.beamLen || 0, p.carry,
     ]),
     e: G.enemies.filter((e) => !e.dead).map((e) => [
       e.id, ETYPES.indexOf(e.type), r0(e.x), r0(e.y), r0(e.vx + e.kvx), r0(e.vy + e.kvy), r2(e.angle), r0(e.hp), r0(e.maxHp),
-      (e.flash > 0 ? 1 : 0) | (e.slow > 0 ? 2 : 0) | (e.charging ? 4 : 0) | (e.enraged ? 8 : 0) | (e.elite ? 16 : 0),
+      (e.flash > 0 ? 1 : 0) | (e.slow > 0 ? 2 : 0) | (e.charging ? 4 : 0) | (e.enraged ? 8 : 0) | (e.elite ? 16 : 0) | (e.lasering ? 32 : 0) | (e.burn > 0 ? 64 : 0),
       r2(e.fuse), r2(Math.max(0, e.spawnT)), BSTATES.indexOf(e.bstate), r2(e.chargeA), r2(e.spin2),
     ]),
     b: G.bullets.map((b) => [r0(b.x), r0(b.y), r0(b.vx), r0(b.vy), BKINDS.indexOf(b.kind)]),
     eb: G.ebullets.map((b) => [r0(b.x), r0(b.y), r0(b.vx), r0(b.vy), b.r, Math.max(0, ECOLS.indexOf(b.color))]),
-    k: G.pickups.map((k) => [k.id, PTYPES.indexOf(k.type), r0(k.x), r0(k.y), k.weapon ? WEAPON_ORDER.indexOf(k.weapon) : -1, r1(k.life)]),
+    k: G.pickups.map((k) => [k.id, PTYPES.indexOf(k.type), r0(k.x), r0(k.y), k.weapon ? WEAPON_ORDER.indexOf(k.weapon) : k.buff ? BUFF_KEYS.indexOf(k.buff) : -1, r1(k.life)]),
+    o: World.snap(),
     r: G.barrels.map((b) => [r0(b.x), r0(b.y), b.fuse >= 0 ? 1 : 0, b.flash > 0 ? 1 : 0]),
     sp: G.spawns.map((s) => [ETYPES.indexOf(s.type), r0(s.x), r0(s.y), r2(s.t), r2(s.max)]),
     ch: G.ch ? [G.ch.text, r1(G.ch.p), G.ch.goal, ['active', 'done', 'fail'].indexOf(G.ch.s), CH_REWARDS[G.ch.reward].text, G.ch.time === null ? -1 : r1(G.ch.time), G.ch.zone ? [G.ch.zone.x, G.ch.zone.y, G.ch.zone.r] : 0, G.ch.inZone ? 1 : 0, G.ch.why || '', G.ch.binary ? 1 : 0] : 0,
@@ -389,7 +397,7 @@ function applyNetInput(p, d) {
 function clientStart(d) {
   G.mode = 'client';
   resetWorld();
-  G.walls = d.walls.map((a) => ({ x: a[0], y: a[1], w: a[2], h: a[3] }));
+  World.applyNetMap(d.mapId || 'city', d.walls);
   G.players = d.players.map((l) => makePlayer(l.id, l.name, l.id === d.you ? 'kbm' : 'remote', l.skin));
   dedupeColors(G.players);
   G.me = playerById(d.you);
@@ -431,6 +439,7 @@ function applySnapshot(s) {
     if (isMe && a[19] !== p.tp) { p.x = p.rx = a[1]; p.y = p.ry = a[2]; p.vx = p.vy = 0; }
     p.tp = a[19];
     p.ups = a[20] || {};
+    p.rage = a[21] || 0; p.haste = a[22] || 0; p.shield = a[23] || 0; p.beamLen = a[24] || 0; p.carry = a[25] === undefined ? -1 : a[25];
   }
   G.players = G.players.filter((p) => ids.has(p.id) || p === G.me);
 
@@ -442,14 +451,14 @@ function applySnapshot(s) {
     if (!e) e = { id: a[0], type, r: ENEMIES[type].r, x: a[2], y: a[3], dead: false, heavy: 0 };
     e.sx = a[2]; e.sy = a[3]; e.svx = a[4]; e.svy = a[5]; e.angle = a[6]; e.hp = a[7]; e.maxHp = a[8];
     const f = a[9];
-    e.flash = f & 1 ? 0.05 : 0; e.slow = f & 2 ? 1 : 0; e.charging = !!(f & 4); e.enraged = !!(f & 8); e.elite = !!(f & 16);
+    e.flash = f & 1 ? 0.05 : 0; e.slow = f & 2 ? 1 : 0; e.charging = !!(f & 4); e.enraged = !!(f & 8); e.elite = !!(f & 16); e.lasering = !!(f & 32); e.burn = f & 64 ? 1 : 0;
     e.fuse = a[10]; e.spawnT = a[11]; e.bstate = BSTATES[a[12]] || 'chase'; e.chargeA = a[13]; e.spin2 = a[14];
     return e;
   });
   G.boss = g[6] >= 0 ? G.enemies.find((e) => e.id === g[6]) || null : null;
 
   G.bullets = s.b.map((a) => {
-    const kind = BKINDS[a[4]], w = WEAPONS[kind];
+    const kind = BKINDS[a[4]], w = WEAPONS[kind] || EXTRA_KINDS[kind];
     return { x: a[0], y: a[1], vx: a[2], vy: a[3], kind, color: w ? w.color : '#7dd8ff', r: w && w.r ? w.r : 3 };
   });
   G.ebullets = s.eb.map((a) => ({ x: a[0], y: a[1], vx: a[2], vy: a[3], r: a[4], color: ECOLS[a[5]] || '#ff4dd2' }));
@@ -457,10 +466,12 @@ function applySnapshot(s) {
   const oldK = new Map(G.pickups.map((k) => [k.id, k]));
   G.pickups = s.k.map((a) => {
     const prev = oldK.get(a[0]);
-    return { id: a[0], type: PTYPES[a[1]], x: a[2], y: a[3], weapon: a[4] >= 0 ? WEAPON_ORDER[a[4]] : null, life: a[5], r: a[1] === 0 ? 5 : 14, bob: prev ? prev.bob : rand(0, TAU) };
+    const type = PTYPES[a[1]];
+    return { id: a[0], type, x: a[2], y: a[3], weapon: type === 'weapon' && a[4] >= 0 ? WEAPON_ORDER[a[4]] : null, buff: type === 'buff' ? BUFF_KEYS[a[4]] : null, life: a[5], r: a[1] === 0 ? 5 : 14, bob: prev ? prev.bob : rand(0, TAU) };
   });
   G.barrels = s.r.map((a) => ({ x: a[0], y: a[1], r: 17, fuse: a[2] ? 0.1 : -1, flash: a[3] ? 0.05 : 0, pulse: G.time * 3 + a[0] }));
   G.ch = s.ch ? { text: s.ch[0], p: s.ch[1], goal: s.ch[2], s: ['active', 'done', 'fail'][s.ch[3]], rewardText: s.ch[4], time: s.ch[5] < 0 ? null : s.ch[5], zone: s.ch[6] ? { x: s.ch[6][0], y: s.ch[6][1], r: s.ch[6][2] } : null, inZone: !!s.ch[7], why: s.ch[8], binary: !!s.ch[9] } : null;
+  if (s.o) World.applySnap(s.o);
   G.spawns = s.sp.map((a) => ({ type: ETYPES[a[0]], x: a[1], y: a[2], t: a[3], max: a[4] }));
 
   for (const ev of s.ev) {

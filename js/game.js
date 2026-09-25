@@ -7,11 +7,11 @@ const input = { keys: Object.create(null), pressed: new Set(), mx: innerWidth / 
 
 // индексы для компактной передачи по сети
 const ETYPES = Object.keys(ENEMIES);
-const BKINDS = WEAPON_ORDER.concat(['drone']);
+const BKINDS = WEAPON_ORDER.concat(Object.keys(EXTRA_KINDS));
 const ECOLS = ['#ff4dd2', '#d66bff', '#ff2d95', '#ff7ad9', '#ffb13b'];
 const WSTATES = ['none', 'countdown', 'active', 'cleared', 'upgrade'];
-const BSTATES = ['chase', 'spiral', 'burst', 'volley', 'charge', 'summon'];
-const PTYPES = ['orb', 'health', 'weapon'];
+const BSTATES = ['chase', 'spiral', 'burst', 'volley', 'charge', 'summon', 'laser'];
+const PTYPES = ['orb', 'health', 'weapon', 'buff'];
 const PCOLORS = ['#33ffff', '#ff9dff', '#f4f4ff', '#5dffc8'];
 const MENU_STATES = ['menu', 'localSetup', 'online', 'lobby', 'missions'];
 
@@ -19,7 +19,7 @@ const G = {
   state: 'menu', mode: 'solo', W: 2600, H: 1800,
   time: 0, slowmo: 0, hitstop: 0,
   players: [], me: null, p2ctl: 'kb2', pc: 1,
-  enemies: [], bullets: [], ebullets: [], pickups: [], barrels: [], walls: [],
+  enemies: [], bullets: [], ebullets: [], pickups: [], barrels: [], walls: [], objs: [], theme: null, mapId: 'city',
   beams: [], bolts: [], novas: [], novaFx: [], spawns: [],
   wave: 0, waveState: 'none', queue: [], spawnTimer: 0, waveTimer: 0, remaining: 0,
   upPending: new Set(), upWaiting: 0, upTimer: 0, upQueue: [], picking: -1, upgradeChoices: [],
@@ -130,6 +130,12 @@ const EFX = {
     if (p && isLocalPlayer(p)) { addShake(26); G.whiteFlash = 0.5; } else addShake(8);
   },
   dash(x, y, color) { SFX.play('dash'); FX.ring(x, y, color, 8, 50, 0.3, 3); },
+  teleFx(x1, y1, x2, y2) {
+    SFX.play('tele');
+    FX.ring(x1, y1, '#b46bff', 40, 5, 0.35, 4);
+    FX.ring(x2, y2, '#b46bff', 5, 60, 0.4, 4);
+    FX.dots(x2, y2, '#d6a8ff', 12, 220, 10, 0.5);
+  },
   banner(t, s, d, c) { showBanner(t, s, d, c); },
   hurt(pid, x, y, dmg) {
     FX.spark(x, y, '#ff3b6b', 14, 360);
@@ -187,6 +193,8 @@ function makePlayer(id, name, ctl, skin) {
     dmgMult: 1, rateMult: 1, extraProj: 0, pierce: 0, bounce: 0, lifesteal: 0, crit: 0.05,
     magnet: 130, ultMult: 1, regen: 0, ammoMult: 1, cryo: 0, chain: 0, dashNova: 0, drones: 0,
     droneAngle: 0, droneCd: [], ups: {}, choices: null, flash: 0,
+    rage: 0, haste: 0, shield: 0, shieldGen: 0, shieldT: 0, burnCh: 0, luck: 1,
+    carry: -1, teleCd: 0, boostT: 0, boostDir: 0, beamLen: 0, beamT: 0,
     intent: { mx: 0, my: 0, aim: 0, fire: false, dash: false, ult: false, weapon: null, cycle: 0 },
   };
 }
@@ -228,7 +236,7 @@ function readIntent(p) {
     I.fire = input.down;
     I.dash = pr.has('Space') || pr.has('ShiftLeft') || pr.has('Mouse2') || (arrows && pr.has('ShiftRight'));
     I.ult = pr.has('KeyF');
-    for (let i = 0; i < WEAPON_ORDER.length; i++) if (pr.has('Digit' + (i + 1))) I.weapon = WEAPON_ORDER[i];
+    for (let i = 0; i < Math.min(10, p.owned.length); i++) if (pr.has('Digit' + ((i + 1) % 10))) I.weapon = p.owned[i];
     if (input.wheel) I.cycle = input.wheel > 0 ? 1 : -1;
     else if (pr.has('KeyQ')) I.cycle = -1;
     else if (pr.has('KeyE')) I.cycle = 1;
@@ -289,8 +297,12 @@ function isFree(x, y, r) {
   if (x < r || y < r || x > G.W - r || y > G.H - r) return false;
   for (const w of G.walls) if (pointInRect(x, y, w, r)) return false;
   for (const b of G.barrels) if (dist2(x, y, b.x, b.y) < (r + b.r) ** 2) return false;
+  for (const o of G.objs || []) if (o.kind !== 'hazard' && o.kind !== 'boost' && dist2(x, y, o.x, o.y) < (r + o.r + 12) ** 2) return false;
   return true;
 }
+
+// итоговый множитель урона (с учётом «Ярости»)
+function effDmg(p) { return p ? p.dmgMult * (p.rage > 0 ? 2 : 1) : 1; }
 
 function freePos(minDist, r) {
   for (let i = 0; i < 60; i++) {
@@ -330,8 +342,8 @@ function resetWorld() {
     score: 0, kills: 0, combo: 0, comboTimer: 0, maxCombo: 0,
     shake: 0, hurt: 0, whiteFlash: 0, banner: null, boss: null, dying: 0,
   });
-  G.stats = { shots: 0, hits: 0, dmg: 0, time: 0, bosses: 0, ch: 0, expl: 0, novas: 0, wk: {} };
-  G.ch = null; G.lastCh = null; G.recorded = false;
+  G.stats = { shots: 0, hits: 0, dmg: 0, time: 0, bosses: 0, ch: 0, expl: 0, novas: 0, wk: {}, turrets: 0, sectors: 0 };
+  G.ch = null; G.lastCh = null; G.recorded = false; G.lastSectorWave = 0; G.objs = [];
   FX.clear();
   Decals.clear();
   input.pressed.clear(); input.down = false;
@@ -341,8 +353,9 @@ function resetWorld() {
 function newGame(defs) {
   resetWorld();
   G.players = [];
-  G.walls = genWalls();
+  World.build(pick(MAP_IDS));
   G.players = defs.map((d) => makePlayer(d.id, d.name, d.ctl, d.skin));
+  if (G.mapId === 'reactor') for (const p of G.players) { p.y += 90; p.ry = p.y; }
   dedupeColors(G.players);
   G.me = G.players.find((p) => p.ctl === 'kbm') || G.players[0];
   G.pc = G.players.length;
@@ -353,7 +366,7 @@ function newGame(defs) {
   const hint = G.mode === 'local'
     ? 'Держитесь вместе — упавшего союзника можно поднять'
     : isOnline() ? 'Команда в сборе. Упавших союзников можно поднять!' : 'WASD — бег · ЛКМ — огонь · Пробел — рывок';
-  fx('banner', 'ГОТОВЬСЯ', hint, 2.2, '#33ffff');
+  fx('banner', 'СЕКТОР: ' + G.theme.name.toUpperCase(), hint, 2.4, G.theme.accent);
 }
 
 function startSolo() { SFX.init(); SFX.play('click'); Net.leave(); G.mode = 'solo'; newGame([{ id: 0, name: 'Игрок', ctl: 'kbm', skin: Meta.data.skin }]); }
@@ -545,6 +558,7 @@ function applyUpgrade(p, uid) {
 function finishUpgrades() {
   G.waveState = 'countdown';
   G.waveTimer = 2.5;
+  if (G.wave > 0 && G.wave % 5 === 0 && G.lastSectorWave !== G.wave) { G.lastSectorWave = G.wave; G.waveTimer = 3.5; World.nextSector(); }
 }
 
 function gameOver() {
@@ -585,6 +599,7 @@ function makeEnemy(type, x, y) {
     angle: rand(0, TAU), flash: 0, slow: 0, spawnT: 0.3, seed: rand(0, 100),
     fireCd: rand(1, 2.5), dir: Math.random() < 0.5 ? -1 : 1, fuse: 0, dead: false, heavy: d.heavy || 0,
     bstate: 'chase', bt: 2, shotT: 0, spin: 0, spin2: 0, chargeA: 0, charging: false, summoned: false, enraged: false, last: '',
+    burn: 0, burnTick: 0, burnSrc: null, lasering: false, laserDir: 1,
   };
 }
 
@@ -601,6 +616,7 @@ function makePickup(type, x, y) {
     pk.weapon = notOwned.length && Math.random() < 0.7 ? pick(notOwned) : pick(pool);
     pk.vx *= 0.3; pk.vy *= 0.3;
   }
+  if (type === 'buff') { pk.buff = pick(BUFF_KEYS); pk.life = 18; pk.vx *= 0.4; pk.vy *= 0.4; }
   return pk;
 }
 
@@ -636,6 +652,14 @@ function collectPickup(pk, p) {
     fx('ptext', p.id, '+30 HP', '#ff6b8e', 'heal');
   } else if (pk.type === 'weapon') {
     giveWeapon(p, pk.weapon);
+  } else if (pk.type === 'buff') {
+    const b = BUFFS[pk.buff];
+    if (pk.buff === 'rage') p.rage = b.dur;
+    else if (pk.buff === 'haste') p.haste = b.dur;
+    else if (pk.buff === 'shield') p.shield = Math.max(p.shield, 60);
+    else if (pk.buff === 'magnet') for (const o of G.pickups) if (o.type === 'orb') o.attract = true;
+    fx('ptext', p.id, b.name + ' — ' + b.desc, b.color, 'buff');
+    fx('ring', Math.round(p.x), Math.round(p.y), b.color, 10, 100, 0.5, 4);
   }
 }
 
@@ -663,18 +687,24 @@ function movePlayer(p, dt) {
     if (p.dashTime <= 0 && isAuth()) dashNova(p);
   } else {
     const f = 1 - Math.exp(-dt * 14);
-    p.vx += (I.mx * p.speed - p.vx) * f;
-    p.vy += (I.my * p.speed - p.vy) * f;
+    const spd = p.speed * (p.haste > 0 ? 1.4 : 1) * (p.carry >= 0 ? 0.85 : 1);
+    p.vx += (I.mx * spd - p.vx) * f;
+    p.vy += (I.my * spd - p.vy) * f;
     p.x += p.vx * dt; p.y += p.vy * dt;
+  }
+  if (p.boostT > 0) {
+    p.boostT -= dt;
+    p.x += Math.cos(p.boostDir) * 650 * dt; p.y += Math.sin(p.boostDir) * 650 * dt;
   }
   for (const w of G.walls) resolveCircleRect(p, p.r, w);
   for (const b of G.barrels) pushOutCircle(p, p.r, b);
   p.x = clamp(p.x, p.r, G.W - p.r); p.y = clamp(p.y, p.r, G.H - p.r);
+  World.playerMove(p, dt);
 }
 
 function dashNova(p) {
   if (p.dashNova <= 0) return;
-  triggerNova(p.x, p.y, 100 + p.dashNova * 25, 25 * p.dashNova * p.dmgMult, false, p.color, p);
+  triggerNova(p.x, p.y, 100 + p.dashNova * 25, 25 * p.dashNova * effDmg(p), false, p.color, p);
   fx('sfx', 'slam');
   fx('shake', 5);
 }
@@ -695,6 +725,12 @@ function actPlayer(p, dt) {
     p.wasDashing = p.dashing;
   }
   p.invuln -= dt; p.flash -= dt;
+  p.rage = Math.max(0, p.rage - dt); p.haste = Math.max(0, p.haste - dt);
+  p.beamT -= dt; if (p.beamT <= 0) p.beamLen = 0;
+  if (p.shieldGen > 0 && !p.dead) {
+    p.shieldT -= dt;
+    if (p.shieldT <= 0) { p.shieldT = 20; if (p.shield < 30 * p.shieldGen) { p.shield = 30 * p.shieldGen; fx('ring', Math.round(p.x), Math.round(p.y), '#4db8ff', 10, 50, 0.4, 3); } }
+  }
   if (p.dead) { I.ult = false; I.weapon = null; I.cycle = 0; return; }
 
   if (I.weapon) switchWeapon(p, I.weapon);
@@ -708,7 +744,7 @@ function actPlayer(p, dt) {
   if (I.ult) {
     if (p.energy >= 100) {
       p.energy = 0;
-      triggerNova(p.x, p.y, 720, 170 * p.dmgMult, true, '#ffffff', p);
+      triggerNova(p.x, p.y, 720, 170 * effDmg(p), true, '#ffffff', p);
       fx('ult', p.id, Math.round(p.x), Math.round(p.y));
       G.stats.novas++;
       if (!isOnline()) G.hitstop = 0.07;
@@ -723,11 +759,18 @@ function actPlayer(p, dt) {
 function fireWeapon(p) {
   const w = WEAPONS[p.cur];
   if (p.ammo[p.cur] <= 0) { switchWeapon(p, 'blaster'); return; }
-  p.fireCd = w.rate / p.rateMult;
+  p.fireCd = w.rate / (p.rateMult * (p.haste > 0 ? 1.5 : 1));
   if (p.ammo[p.cur] !== Infinity) p.ammo[p.cur]--;
   const a = p.angle, ca = Math.cos(a), sa = Math.sin(a);
   const mx = p.x + ca * 24, my = p.y + sa * 24;
 
+  if (w.beam) { fireBeam(p, mx, my, a, w); G.stats.shots++; return; }
+  if (w.tesla) {
+    fireTesla(p, mx, my, a, w);
+    G.stats.shots++;
+    fx('shot', p.id, Math.round(mx), Math.round(my), +a.toFixed(2), WEAPON_ORDER.indexOf(p.cur));
+    return;
+  }
   if (w.hitscan) {
     const n = 1 + p.extraProj;
     for (let i = 0; i < n; i++) fireRail(p, mx, my, a + (i - (n - 1) / 2) * 0.07, w);
@@ -741,9 +784,10 @@ function fireWeapon(p) {
       const sp = w.speed * (w.speedVar ? rand(1 - w.speedVar, 1 + w.speedVar) : 1);
       G.bullets.push({
         x: mx, y: my, px: mx, py: my, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, r: w.r,
-        dmg: w.dmg * p.dmgMult, life: w.life * (w.speedVar ? rand(0.85, 1.1) : 1), color: w.color,
+        dmg: w.dmg * effDmg(p), life: w.returns ? 6 : w.life * (w.speedVar ? rand(0.85, 1.1) : 1), color: w.color,
         pierce: (w.pierce || 0) + p.pierce, bounce: (w.bounce || 0) + p.bounce, explode: w.explode || null,
         homing: w.homing || 0, knock: w.knock || 120, kind: p.cur, hit: null, drone: false, counted: false, own: p,
+        burn: !!w.burn, returns: !!w.returns, out: w.life, age: 0, back: false, cluster: w.cluster || 0,
       });
     }
     G.stats.shots += n;
@@ -759,7 +803,7 @@ function fireRail(p, x, y, a, w) {
   let tEnd = Math.min(1, tx, ty);
   for (const wl of G.walls) { const t = segRect(x, y, x + dx, y + dy, wl); if (t >= 0 && t < tEnd) tEnd = t; }
   const ex = x + dx * tEnd, ey = y + dy * tEnd;
-  const dmg = w.dmg * p.dmgMult;
+  const dmg = w.dmg * effDmg(p);
   let any = false;
   for (const e of G.enemies) {
     if (e.dead) continue;
@@ -775,6 +819,12 @@ function fireRail(p, x, y, a, w) {
 
 function damagePlayer(p, dmg, sx, sy) {
   if (p.dead || p.invuln > 0 || isDashing(p)) return;
+  if (p.shield > 0) {
+    const ab = Math.min(p.shield, dmg);
+    p.shield -= ab; dmg -= ab;
+    fx('spark', Math.round(p.x), Math.round(p.y), '#4db8ff', 8, 260);
+    if (dmg <= 0) { p.invuln = 0.35; fx('sfx', 'bounce'); return; }
+  }
   p.hp -= dmg;
   p.invuln = 0.7;
   G.combo = 0;
@@ -837,7 +887,8 @@ function damageEnemy(e, dmg, o) {
   e.hp -= dmg; e.flash = 0.07;
   if (o.kx) { const h = 1 - e.heavy; e.kvx += o.kx * h; e.kvy += o.ky * h; }
   if (src.cryo > 0 && Math.random() < src.cryo) e.slow = 2;
-  fx('num', Math.round(e.x), Math.round(e.y - e.r - 4), Math.round(dmg), crit ? 1 : 0);
+  if (o.burn || (src.burnCh > 0 && o.kind !== 'burn' && Math.random() < src.burnCh)) { if (e.burn <= 0) e.burnTick = 0.33; e.burn = 2.5; e.burnSrc = src; }
+  if (!o.quiet || Math.random() < 0.18) fx('num', Math.round(e.x), Math.round(e.y - e.r - 4), Math.round(dmg), crit ? 1 : 0);
   if (o.chain !== false && src.chain > 0 && Math.random() < src.chain) chainLightning(e, dmg * 0.7, src);
   if (e.hp <= 0) killEnemy(e, src, o.kind, o.expl);
 }
@@ -863,6 +914,7 @@ function killEnemy(e, src, kind, expl) {
   const lowHp = G.players.some((p) => !p.dead && p.hp < p.maxHp * 0.4);
   if (Math.random() < (lowHp ? 0.07 : 0.035)) G.pickups.push(makePickup('health', e.x, e.y));
   if (Math.random() < (e.type === 'tank' ? 0.3 : 0.015)) G.pickups.push(makePickup('weapon', e.x, e.y));
+  if (e.elite || Math.random() < 0.03 * (src ? src.luck : 1)) G.pickups.push(makePickup('buff', e.x, e.y));
 
   if (e.type === 'splitter') {
     for (let i = 0; i < 3; i++) {
@@ -972,13 +1024,31 @@ function updateBullets(dt) {
           b.vx = Math.cos(na) * sp; b.vy = Math.sin(na) * sp;
         }
       }
+      // дископил: летит вперёд, затем возвращается к владельцу сквозь стены
+      if (b.returns) {
+        b.age += dt;
+        if (!b.back && b.age > b.out) { b.back = true; b.hit = null; }
+        if (b.back) {
+          const o = b.own, dx = o.x - b.x, dy = o.y - b.y, d = Math.hypot(dx, dy) || 1;
+          const f = 1 - Math.exp(-dt * 7);
+          b.vx += ((dx / d) * 900 - b.vx) * f; b.vy += ((dy / d) * 900 - b.vy) * f;
+          if (d < 28 || o.dead) dead = true;
+        }
+      }
       b.px = b.x; b.py = b.y;
       b.x += b.vx * dt; b.y += b.vy * dt;
 
       let hitWall = false;
-      if (b.x < 0 || b.x > G.W) { if (b.bounce > 0) { b.vx = -b.vx; b.x = b.px; b.bounce--; fx('sfx', 'bounce'); } else hitWall = true; }
-      if (b.y < 0 || b.y > G.H) { if (b.bounce > 0) { b.vy = -b.vy; b.y = b.py; b.bounce--; fx('sfx', 'bounce'); } else hitWall = true; }
-      if (!hitWall) {
+      const ghost = b.returns && b.back;
+      if (b.returns && !b.back && (b.x < 0 || b.x > G.W || b.y < 0 || b.y > G.H || G.walls.some((w) => pointInRect(b.x, b.y, w)))) {
+        b.back = true; b.hit = null; b.x = b.px; b.y = b.py;
+        fx('spark', Math.round(b.x), Math.round(b.y), b.color, 5, 250);
+      }
+      if (!ghost && !b.returns) {
+        if (b.x < 0 || b.x > G.W) { if (b.bounce > 0) { b.vx = -b.vx; b.x = b.px; b.bounce--; fx('sfx', 'bounce'); } else hitWall = true; }
+        if (b.y < 0 || b.y > G.H) { if (b.bounce > 0) { b.vy = -b.vy; b.y = b.py; b.bounce--; fx('sfx', 'bounce'); } else hitWall = true; }
+      }
+      if (!hitWall && !b.returns) {
         for (const w of G.walls) {
           if (!pointInRect(b.x, b.y, w)) continue;
           if (b.bounce > 0) {
@@ -1001,9 +1071,15 @@ function updateBullets(dt) {
           const rr = e.r + b.r;
           if (dist2(b.x, b.y, e.x, e.y) > rr * rr) continue;
           if (b.hit && b.hit.includes(e.id)) continue;
+          // щитоносец блокирует всё, что прилетает спереди (кроме взрывчатки и пил)
+          if (e.type === 'shield' && !b.explode && !b.returns && Math.abs(angleDiff(e.angle, Math.atan2(b.y - e.y, b.x - e.x))) < 1.15) {
+            fx('spark', Math.round(b.x), Math.round(b.y), '#bfe6ff', 5, 260);
+            fx('sfx', 'bounce');
+            dead = true; break;
+          }
           if (!b.drone && !b.counted) { G.stats.hits++; b.counted = true; }
           const sp = Math.hypot(b.vx, b.vy) || 1;
-          damageEnemy(e, b.dmg, { kx: (b.vx / sp) * b.knock, ky: (b.vy / sp) * b.knock, src: b.own, kind: b.kind });
+          damageEnemy(e, b.dmg, { kx: (b.vx / sp) * b.knock, ky: (b.vy / sp) * b.knock, src: b.own, kind: b.kind === 'bomblet' ? 'cluster' : b.kind, burn: b.burn, quiet: b.kind === 'flamer' });
           if (b.explode) { dead = true; break; }
           if (b.pierce > 0) { b.pierce--; (b.hit || (b.hit = [])).push(e.id); b.dmg *= 0.85; }
           else { dead = true; break; }
@@ -1016,10 +1092,79 @@ function updateBullets(dt) {
       }
     }
     if (dead) {
-      if (b.explode) explode(b.x, b.y, b.explode.r, b.explode.dmg * b.own.dmgMult, 'p', 0, b.own, b.kind);
+      if (b.explode) explode(b.x, b.y, b.explode.r, b.explode.dmg * effDmg(b.own), 'p', 0, b.own, b.kind === 'bomblet' ? 'cluster' : b.kind);
+      if (b.cluster) {
+        for (let k = 0; k < b.cluster; k++) {
+          const a = (k * TAU) / b.cluster + rand(-0.3, 0.3), s = rand(220, 330);
+          B.push({ x: b.x, y: b.y, px: b.x, py: b.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, r: 5, dmg: 10 * effDmg(b.own), life: rand(0.25, 0.42), color: '#ffe23b', pierce: 0, bounce: 1, explode: { r: 70, dmg: 30 }, homing: 0, knock: 60, kind: 'bomblet', hit: null, drone: true, counted: true, own: b.own });
+        }
+      }
       removeAt(B, i);
     }
   }
+}
+
+// лазер: непрерывный луч, урон каждый тик
+function fireBeam(p, x, y, a, w) {
+  const max = w.range, ca = Math.cos(a), sa = Math.sin(a);
+  let len = rayLen(x, y, a, max);
+  const ex = x + ca * len, ey = y + sa * len;
+  const hits = [];
+  for (const e of G.enemies) {
+    if (e.dead || e.spawnT > 0.15) continue;
+    const t = segCircle(x, y, ex, ey, e.x, e.y, e.r + 3);
+    if (t >= 0) hits.push([t, e]);
+  }
+  hits.sort((m, n) => m[0] - n[0]);
+  let left = 1 + p.pierce;
+  const dmg = w.dmg * effDmg(p);
+  for (const [t, e] of hits) {
+    if (e.type === 'shield' && Math.abs(angleDiff(e.angle, Math.atan2(y - e.y, x - e.x))) < 1.15) { len = t * len; left = 0; break; }
+    damageEnemy(e, dmg, { src: p, kind: 'laser', kx: ca * 30, ky: sa * 30, quiet: true, chain: Math.random() < 0.15 });
+    if (--left <= 0) { len = t * len; break; }
+  }
+  for (const b of G.barrels) if (b.fuse < 0 && segCircle(x, y, x + ca * len, y + sa * len, b.x, b.y, b.r) >= 0) hitBarrel(b, dmg);
+  if (hits.length) G.stats.hits++;
+  p.beamT = 0.12;
+  p.beamLen = Math.round(len + 24);
+}
+
+// тесла: молния сама ищет цель в конусе прицела и перескакивает дальше
+function fireTesla(p, x, y, a, w) {
+  let best = null, bs = Infinity;
+  for (const e of G.enemies) {
+    if (e.dead || e.spawnT > 0) continue;
+    const d = dist(x, y, e.x, e.y);
+    if (d > w.range) continue;
+    const ad = Math.abs(angleDiff(a, Math.atan2(e.y - y, e.x - x)));
+    if (ad > 1.1) continue;
+    const s = d * (1 + ad * 1.5);
+    if (s < bs) { bs = s; best = e; }
+  }
+  fx('sfx', 'tesla');
+  if (!best) {
+    const pts = [{ x, y }, { x: x + Math.cos(a) * 110, y: y + Math.sin(a) * 110 }];
+    fx('bolt', jagFlat(pts));
+    return;
+  }
+  const hit = [best.id], pts = [{ x, y }, { x: best.x, y: best.y }];
+  let dmg = w.dmg * effDmg(p), cur = best;
+  damageEnemy(best, dmg, { src: p, kind: 'tesla', chain: false });
+  G.stats.hits++;
+  for (let k = 0; k < w.chains - 1 + p.extraProj; k++) {
+    let nx = null, nd = 230 * 230;
+    for (const e of G.enemies) {
+      if (e.dead || hit.includes(e.id)) continue;
+      const d2 = dist2(cur.x, cur.y, e.x, e.y);
+      if (d2 < nd) { nd = d2; nx = e; }
+    }
+    if (!nx) break;
+    dmg *= 0.85;
+    hit.push(nx.id); pts.push({ x: nx.x, y: nx.y });
+    damageEnemy(nx, dmg, { src: p, kind: 'tesla', chain: false, canCrit: false });
+    cur = nx;
+  }
+  fx('bolt', jagFlat(pts));
 }
 
 function updateEnemyBullets(dt) {
@@ -1093,7 +1238,55 @@ function updateEnemies(dt) {
     const ux = dx / d, uy = dy / d, faceA = Math.atan2(dy, dx);
     let mx = ux, my = uy, sp = e.speed * (e.slow > 0 ? 0.5 : 1);
 
+    // горение
+    if (e.burn > 0) {
+      e.burn -= dt; e.burnTick -= dt;
+      if (e.burnTick <= 0) {
+        e.burnTick = 0.33;
+        damageEnemy(e, 5 * (1 + G.wave * 0.06) * effDmg(e.burnSrc), { canCrit: false, chain: false, quiet: true, kind: 'burn', src: e.burnSrc || G.players[0] });
+        if (e.dead) continue;
+      }
+    }
+
     switch (e.type) {
+      case 'blinker': {
+        // фантом: периодически телепортируется к игроку
+        const w = Math.sin(G.time * 3 + e.seed) * 0.6;
+        mx = ux - uy * w; my = uy + ux * w;
+        e.fireCd -= dt;
+        if (e.fireCd <= 0 && tgt && d < 750) {
+          e.fireCd = rand(2.2, 3.4);
+          const a = rand(0, TAU), rr = rand(110, 190);
+          const nx = clamp(tgt.x + Math.cos(a) * rr, 40, G.W - 40), ny = clamp(tgt.y + Math.sin(a) * rr, 40, G.H - 40);
+          if (isFree(nx, ny, e.r)) {
+            fx('ring', Math.round(e.x), Math.round(e.y), '#b0ffea', 5, 45, 0.3, 3);
+            e.x = nx; e.y = ny; e.vx = e.vy = 0;
+            fx('ring', Math.round(nx), Math.round(ny), '#b0ffea', 45, 5, 0.3, 3);
+            fx('sfx', 'tele');
+          }
+        }
+        break;
+      }
+      case 'healer': {
+        // лекарь держит дистанцию и лечит союзников
+        if (d < 330) { mx = -ux; my = -uy; }
+        else if (d > 480) { mx = ux; my = uy; }
+        else { mx = -uy * e.dir; my = ux * e.dir; }
+        e.fireCd -= dt;
+        if (e.fireCd <= 0) {
+          e.fireCd = 2.2;
+          let any = false;
+          for (const o of E) {
+            if (o === e || o.dead || o.hp >= o.maxHp || dist2(o.x, o.y, e.x, e.y) > 190 * 190) continue;
+            const heal = o.maxHp * (o.type === 'boss' ? 0.03 : 0.25);
+            o.hp = Math.min(o.maxHp, o.hp + heal);
+            fx('text', Math.round(o.x), Math.round(o.y - o.r - 6), '+' + Math.round(heal), '#7dff7d', 13, 0);
+            any = true;
+          }
+          if (any) { fx('ring', Math.round(e.x), Math.round(e.y), '#7dff7d', 10, 190, 0.5, 3); fx('sfx', 'heal'); }
+        }
+        break;
+      }
       case 'runner': {
         const w = Math.sin(G.time * 5 + e.seed) * 0.9;
         mx = ux - uy * w; my = uy + ux * w;
@@ -1151,6 +1344,7 @@ function updateEnemies(dt) {
 
     if (e.type === 'splitter' || e.type === 'mini') e.angle += dt * (e.type === 'mini' ? 4 : 1.5);
     else if (e.type === 'tank') e.angle += dt * 0.8;
+    else if (e.type === 'shield') e.angle = lerpAngle(e.angle, faceA, 1 - Math.exp(-dt * 4));
     else if (e.type !== 'boss') e.angle = lerpAngle(e.angle, Math.atan2(e.vy, e.vx), 1 - Math.exp(-dt * 10));
 
     if (e.spawnT <= 0 && e.type !== 'bomber') {
@@ -1176,6 +1370,25 @@ function updateBoss(e, dt, ux, uy, faceA) {
   e.spin2 += dt * (e.enraged ? 2.2 : 1);
   let mx = 0, my = 0, sp = e.speed * k;
   switch (e.bstate) {
+    case 'laser': {
+      // вращающийся лазерный луч: сначала прицеливание, потом свип
+      sp = 0;
+      if (e.bt > 2.3) {
+        e.chargeA = lerpAngle(e.chargeA, faceA, 0.2);
+      } else {
+        if (!e.lasering) {
+          e.lasering = true;
+          e.laserDir = Math.random() < 0.5 ? -1 : 1;
+          fx('sfx', 'rail'); fx('shake', 8);
+        }
+        e.chargeA += e.laserDir * dt * (e.enraged ? 1.05 : 0.8);
+        const len = rayLen(e.x, e.y, e.chargeA, 1100);
+        const ex = e.x + Math.cos(e.chargeA) * len, ey = e.y + Math.sin(e.chargeA) * len;
+        for (const p of G.players) if (!p.dead && segCircle(e.x, e.y, ex, ey, p.x, p.y, p.r + 6) >= 0) damagePlayer(p, e.dmg * 0.55, e.x, e.y);
+      }
+      if (e.bt <= 0) { e.lasering = false; bossNext(e); }
+      break;
+    }
     case 'chase':
       mx = ux; my = uy;
       if (e.bt <= 0) bossNext(e);
@@ -1245,10 +1458,11 @@ function updateBoss(e, dt, ux, uy, faceA) {
 
 function bossNext(e) {
   if (e.bstate !== 'chase') { e.bstate = 'chase'; e.bt = e.enraged ? 0.9 : 1.6; e.charging = false; return; }
-  const opts = ['spiral', 'burst', 'charge', 'volley', 'summon'].filter((s) => s !== e.last);
+  const opts = ['spiral', 'burst', 'charge', 'volley', 'summon', 'laser'].filter((s) => s !== e.last);
   const s = pick(opts);
   e.last = s; e.bstate = s; e.shotT = 0.4; e.summoned = false; e.charging = false;
-  e.bt = { spiral: 3.2, burst: 2.6, charge: 0.9, volley: 2.4, summon: 1.2 }[s];
+  e.lasering = false;
+  e.bt = { spiral: 3.2, burst: 2.6, charge: 0.9, volley: 2.4, summon: 1.2, laser: 3.2 }[s];
 }
 
 function updatePickups(dt) {
@@ -1345,7 +1559,7 @@ function updateDrones(dt) {
       const best = nearestEnemy(x, y, 520);
       if (!best) { p.droneCd[i] = 0.15; continue; }
       const a = Math.atan2(best.y - y, best.x - x);
-      G.bullets.push({ x, y, px: x, py: y, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950, r: 3, dmg: 9 * p.dmgMult, life: 0.7, color: '#7dd8ff', pierce: 0, bounce: 0, explode: null, homing: 0, knock: 50, kind: 'drone', hit: null, drone: true, counted: true, own: p });
+      G.bullets.push({ x, y, px: x, py: y, vx: Math.cos(a) * 950, vy: Math.sin(a) * 950, r: 3, dmg: 9 * effDmg(p), life: 0.7, color: '#7dd8ff', pierce: 0, bounce: 0, explode: null, homing: 0, knock: 50, kind: 'drone', hit: null, drone: true, counted: true, own: p });
       fx('dshot', Math.round(x), Math.round(y), +a.toFixed(2));
       p.droneCd[i] = 0.45 / p.rateMult;
     }
@@ -1380,7 +1594,19 @@ function cosmetics(dt) {
       FX.add({ type: 'dot', x: p.rx - Math.cos(a) * 12 + rand(-4, 4), y: p.ry - Math.sin(a) * 12 + rand(-4, 4), vx: -Math.cos(a) * 60, vy: -Math.sin(a) * 60, life: 0.3, size: 7, color: '#1a9bff', drag: 2 });
     }
   }
-  for (const e of G.enemies) if (e.type === 'boss' && e.charging && Math.random() < 0.8) FX.spark(e.x, e.y, '#ff2d95', 2, 200);
+  for (const e of G.enemies) {
+    if (e.type === 'boss' && e.charging && Math.random() < 0.8) FX.spark(e.x, e.y, '#ff2d95', 2, 200);
+    if (e.burn > 0 && Math.random() < dt * 20) {
+      FX.add({ type: 'dot', x: e.x + rand(-e.r, e.r) * 0.6, y: e.y + rand(-e.r, e.r) * 0.6, vx: rand(-20, 20), vy: rand(-90, -40), life: rand(0.25, 0.45), size: rand(6, 11), color: pick(['#ff7a1a', '#ffb13b', '#ff4d1a']), drag: 1 });
+    }
+  }
+  // лазерные лучи игроков
+  for (const p of G.players) {
+    if (p.dead || !(p.beamLen > 0)) continue;
+    const ex = p.rx + Math.cos(p.angle) * p.beamLen, ey = p.ry + Math.sin(p.angle) * p.beamLen;
+    if (Math.random() < dt * 30) FX.spark(ex, ey, '#ff3bd4', 2, 260);
+    SFX.play('laser');
+  }
 }
 
 function updateVisuals(dt, rdt) {
@@ -1436,6 +1662,7 @@ function update(dt, rdt) {
   updateEnemies(dt);
   updatePickups(dt);
   updateBarrels(dt);
+  World.update(dt);
   updateNovas(dt);
   Ch.update(dt);
   updateVisuals(dt, rdt);
@@ -1466,7 +1693,7 @@ function initMenuScene() {
   G.players = []; G.me = null; G.pc = 1;
   G.barrels = []; G.pickups = []; G.bullets = []; G.ebullets = []; G.spawns = []; G.novas = []; G.novaFx = []; G.beams = []; G.bolts = [];
   G.boss = null; G.banner = null; G.wave = 1;
-  G.walls = genWalls();
+  World.build(pick(MAP_IDS));
   G.enemies = [];
   for (let i = 0; i < 18; i++) {
     const pos = freePos(0, 40) || { x: G.W / 2, y: G.H / 2 };
