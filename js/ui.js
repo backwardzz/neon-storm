@@ -147,7 +147,7 @@ const UI = {
     if (!Net.available()) this.$('netLibWarn').style.display = 'block';
 
     // игра открыта с lan-server.ps1? — тогда включаем Wi-Fi-режим
-    if (location.protocol.startsWith('http')) {
+    if (location.protocol.startsWith('http') && !location.hostname.endsWith('github.io')) {
       fetch('lan.json', { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null))
         .then((j) => { if (j && j.lan) { Net.lan = j; this.updateLan(); } })
