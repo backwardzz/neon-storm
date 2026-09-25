@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neon Storm</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;600;800&family=Russo+One&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- Главное меню -->
+  <div id="menu" class="screen">
+    <div class="panel menu-panel">
+      <h1 class="logo">NEON<span>STORM</span></h1>
+      <p class="tagline">Аренный шутер. Бесконечные волны, боссы и улучшения.<br>Один, вдвоём на одном ПК или с друзьями онлайн.</p>
+      <div class="mode-btns">
+        <button id="btnPlay" class="btn primary">ОДИН ИГРОК</button>
+        <div class="btn-row tight">
+          <button id="btnLocal" class="btn secondary">КООП НА ОДНОМ ПК</button>
+          <button id="btnOnline" class="btn secondary">ОНЛАЙН ДО 4</button>
+        </div>
+      </div>
+      <div class="best">Рекорд: <b id="bestScore">0</b> · Лучшая волна: <b id="bestWave">0</b></div>
+      <div class="controls">
+        <div><kbd>W A S D</kbd> движение</div>
+        <div><kbd>Мышь</kbd> прицел</div>
+        <div><kbd>ЛКМ</kbd> огонь (зажать)</div>
+        <div><kbd>Пробел</kbd> / <kbd>ПКМ</kbd> рывок</div>
+        <div><kbd>1–6</kbd> / <kbd>Колесо</kbd> / <kbd>Q E</kbd> оружие</div>
+        <div><kbd>F</kbd> нова — ульта</div>
+        <div><kbd>Esc</kbd> пауза</div>
+        <div><kbd>M</kbd> звук</div>
+      </div>
+      <div class="tips">
+        <span>💡 Взрывай красные бочки рядом с толпой</span>
+        <span>💡 Рывок даёт неуязвимость</span>
+        <span>💡 Каждая 5-я волна — босс</span>
+      </div>
+      <button class="btn secondary small mute-btn">ЗВУК: ВКЛ</button>
+    </div>
+  </div>
+
+  <!-- Локальный кооп -->
+  <div id="localSetup" class="screen dim">
+    <div class="panel">
+      <h2 class="title">КООП НА ОДНОМ ПК</h2>
+      <p class="tagline">Игрок 1 — клавиатура и мышь (WASD + мышь).<br>Как будет управлять Игрок 2?</p>
+      <div class="choice-grid">
+        <button id="btnP2kb" class="choice">
+          <span class="icon">⌨️</span>
+          <span class="name">Клавиатура</span>
+          <span class="desc"><kbd>Стрелки</kbd> движение<br><kbd>/</kbd> или <kbd>Правый Ctrl</kbd> огонь<br><kbd>Правый Shift</kbd> рывок<br><kbd>Enter</kbd> нова · <kbd>,</kbd> <kbd>.</kbd> оружие<br><i>Прицел наводится сам</i></span>
+        </button>
+        <button id="btnP2pad" class="choice">
+          <span class="icon">🎮</span>
+          <span class="name">Геймпад</span>
+          <span class="desc">Левый стик — движение<br>Правый стик — прицел и огонь<br><kbd>RT</kbd> огонь · <kbd>A</kbd>/<kbd>LT</kbd> рывок<br><kbd>Y</kbd> нова · <kbd>X</kbd>/<kbd>RB</kbd> оружие<br><i>Без правого стика — автоприцел</i></span>
+        </button>
+      </div>
+      <div id="padStatus" class="pad-status"></div>
+      <button id="btnLocalBack" class="btn secondary small">НАЗАД</button>
+    </div>
+  </div>
+
+  <!-- Онлайн -->
+  <div id="online" class="screen dim">
+    <div class="panel">
+      <h2 class="title">ОНЛАЙН</h2>
+      <label class="field">
+        <span>Твой ник</span>
+        <input id="nameInput" maxlength="14" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="online-grid">
+        <div class="online-box">
+          <h3>Создать комнату</h3>
+          <p>Ты — хост. Получишь код и отправишь его друзьям.</p>
+          <button id="btnCreate" class="btn">СОЗДАТЬ</button>
+        </div>
+        <div class="online-box">
+          <h3>Войти по коду</h3>
+          <input id="codeInput" class="code-input" placeholder="КОД" maxlength="5" autocomplete="off" spellcheck="false">
+          <button id="btnJoin" class="btn">ВОЙТИ</button>
+        </div>
+      </div>
+      <div id="netStatus" class="net-status"></div>
+      <div id="netLibWarn" class="net-status err" style="display:none">Библиотека PeerJS не загрузилась. Для онлайна нужен интернет.</div>
+      <p class="hint small-note">Соединение идёт напрямую между игроками (WebRTC). Для поиска комнаты используется бесплатный сервер PeerJS, поэтому нужен интернет. Хост держит всю игру — не сворачивай вкладку хоста.</p>
+      <button id="btnOnlineBack" class="btn secondary small">НАЗАД</button>
+    </div>
+  </div>
+
+  <!-- Лобби -->
+  <div id="lobby" class="screen dim">
+    <div class="panel">
+      <h2 class="title">КОМНАТА</h2>
+      <div class="code-box">
+        <span class="code-label">КОД</span>
+        <span id="lobbyCode" class="code-value">-----</span>
+        <button id="btnCopy" class="btn secondary small">КОПИРОВАТЬ</button>
+      </div>
+      <ul id="lobbyList" class="lobby-list"></ul>
+      <p id="lobbyHint" class="hint"></p>
+      <div class="btn-row">
+        <button id="btnStart" class="btn primary">НАЧАТЬ ИГРУ</button>
+        <div id="lobbyWait" class="waiting">Ожидание хоста<span class="dots"></span></div>
+        <button id="btnLobbyLeave" class="btn secondary">ВЫЙТИ</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Пауза -->
+  <div id="paused" class="screen dim">
+    <div class="panel">
+      <h2 class="title">ПАУЗА</h2>
+      <p id="pauseNote" class="hint warn">В онлайне игра не останавливается — союзники продолжают бой!</p>
+      <div class="btn-col">
+        <button id="btnResume" class="btn primary">ПРОДОЛЖИТЬ</button>
+        <button class="btn secondary mute-btn">ЗВУК: ВКЛ</button>
+        <button id="btnQuit" class="btn secondary">В МЕНЮ</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Выбор улучшения -->
+  <div id="upgrade" class="screen dim">
+    <div class="upgrade-wrap">
+      <h2 id="upTitle" class="title">ВЫБЕРИ УЛУЧШЕНИЕ</h2>
+      <p id="upHint" class="hint">Кликни по карточке или нажми 1 · 2 · 3</p>
+      <div id="cards" class="cards"></div>
+    </div>
+  </div>
+
+  <!-- Конец игры -->
+  <div id="gameover" class="screen dim">
+    <div class="panel">
+      <h2 id="goTitle" class="title danger">ТЫ ПАЛ</h2>
+      <div id="newRecord" class="record">★ НОВЫЙ РЕКОРД ★</div>
+      <div id="goStats" class="stats"></div>
+      <div class="btn-row">
+        <button id="btnRetry" class="btn primary">ЕЩЁ РАЗ</button>
+        <button id="btnMenu" class="btn secondary">МЕНЮ</button>
+      </div>
+      <p id="goHint" class="hint">Enter — начать заново</p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/fx.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>
